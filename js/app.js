@@ -675,7 +675,6 @@
     saveRecent(label, waypointLngLat);
     hideSheet();
     $("hint").classList.add("hidden");
-    $("pc-bar").classList.add("hidden");
     speak("Rota noktası belirlendi.");
     requestRoute();
   }
