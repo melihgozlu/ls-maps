@@ -301,3 +301,78 @@
           "text-field": TR_NAME,
           "text-font": ["Noto Sans Regular"],
           "text-size": ["interpolate", ["linear"], ["zoom"], 13, 10, 17, 13],
+          "text-transform": "uppercase",
+          "text-letter-spacing": 0.06
+        },
+        paint: {
+          "text-color": C.label,
+          "text-halo-color": C.labelHalo,
+          "text-halo-width": 1.6
+        }
+      },
+      {
+        id: "poi-label",
+        type: "symbol",
+        source: "omt",
+        "source-layer": "poi",
+        minzoom: 14,
+        filter: ["<=", ["get", "rank"], 8],
+        layout: {
+          "text-field": TR_NAME,
+          "text-font": ["Noto Sans Regular"],
+          "text-size": 10.5,
+          "text-offset": [0, 0.9],
+          "text-anchor": "top",
+          "text-max-width": 9
+        },
+        paint: {
+          "text-color": C.labelDim,
+          "text-halo-color": C.labelHalo,
+          "text-halo-width": 1.3
+        }
+      },
+      {
+        id: "place-suburb",
+        type: "symbol",
+        source: "omt",
+        "source-layer": "place",
+        minzoom: 11,
+        maxzoom: 16,
+        filter: ["in", ["get", "class"], ["literal", ["suburb", "neighbourhood", "quarter"]]],
+        layout: {
+          "text-field": TR_NAME,
+          "text-font": ["Noto Sans Bold"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 11, 10, 15, 13],
+          "text-transform": "uppercase",
+          "text-letter-spacing": 0.1
+        },
+        paint: {
+          "text-color": C.labelDim,
+          "text-halo-color": C.labelHalo,
+          "text-halo-width": 1.6
+        }
+      },
+      {
+        id: "place-city",
+        type: "symbol",
+        source: "omt",
+        "source-layer": "place",
+        minzoom: 5,
+        maxzoom: 14,
+        filter: ["in", ["get", "class"], ["literal", ["city", "town"]]],
+        layout: {
+          "text-field": TR_NAME,
+          "text-font": ["Noto Sans Bold"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 5, 11, 12, 17],
+          "text-transform": "uppercase",
+          "text-letter-spacing": 0.08
+        },
+        paint: {
+          "text-color": C.label,
+          "text-halo-color": C.labelHalo,
+          "text-halo-width": 2
+        }
+      }
+    ]
+  };
+})();
