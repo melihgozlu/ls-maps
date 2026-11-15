@@ -1,31 +1,31 @@
-// LS Maps — Waze-style navigation with a GTA-inspired look.
-// Free services: OpenFreeMap (map tiles), OSRM demo server (routing), Nominatim (search).
+// LS Maps — GTA tarzı görünüme sahip Waze benzeri navigasyon.
+// Ücretsiz servisler: OpenFreeMap (harita karoları), OSRM demo sunucusu (rotalama), Nominatim (arama).
 
 (function () {
   "use strict";
 
   var OSRM_URL = "https://router.project-osrm.org/route/v1/driving/";
   var NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
-  var DEFAULT_CENTER = [-118.2437, 34.0522]; // Los Angeles — the real Los Santos
+  var DEFAULT_CENTER = [32.4932, 37.8746]; // Konya — GPS öncesi varsayılan merkez
   var OFF_ROUTE_METERS = 60;
   var OFF_ROUTE_SECONDS = 6;
   var ARRIVE_METERS = 28;
-  var DEMO_SPEED_MPS = 17; // ~38 mph
+  var DEMO_SPEED_MPS = 17; // ~61 km/s
   var OVERPASS_URL = "https://overpass-api.de/api/interpreter";
-  // Shared reports backend (Supabase — publishable key, RLS does the protecting)
+  // Ortak bildirim altyapısı (Supabase)
   var SUPA_URL = "https://powdosapvcvlrhpcggqz.supabase.co";
   var SUPA_KEY = "sb_publishable_4QnCoMp5Q86_hYCCGvGU3w_TwRVmNVF";
-  // TomTom — live traffic (rate-limited public key, not a secret)
+  // TomTom — canlı trafik
   var TOMTOM_KEY = "D6R8XYf9jmjbFIr4o1Nt3lhEWNuDfY9n";
   var TOMTOM_INCIDENTS = "https://api.tomtom.com/traffic/services/5/incidentDetails";
   var TOMTOM_ROUTE = "https://api.tomtom.com/routing/1/calculateRoute/";
-  var ALERT_RADIUS_M = 500;          // warn within this distance
-  var ALERT_REWARN_MS = 10 * 60 * 1000; // don't re-warn same spot for 10 min
-  var POLICE_TTL_MS = 4 * 60 * 60 * 1000; // police reports expire after 4 h
+  var ALERT_RADIUS_M = 500;          // bu mesafe içinde uyar
+  var ALERT_REWARN_MS = 10 * 60 * 1000; // aynı nokta için 10 dk tekrar uyarma
+  var POLICE_TTL_MS = 4 * 60 * 60 * 1000; // polis bildirimleri 4 saat geçerli
 
   var map, playerMarker, waypointMarker;
   var playerPos = null;        // [lng, lat]
-  var playerHeading = 0;       // degrees
+  var playerHeading = 0;       // derece
   var playerSpeedMps = 0;
   var lastGpsPos = null;
   var hasGpsFix = false;
@@ -33,17 +33,17 @@
 
   var route = null;            // { coords, cum, totalDist, totalDur, steps }
   var waypointLngLat = null;
-  var customOrigin = null;     // [lng, lat] when start ≠ your location
+  var customOrigin = null;     // [lng, lat] başlangıç ≠ mevcut konum olduğunda
   var originMarker = null;
   var navActive = false;
   var demoActive = false;
   var demoTraveled = 0;
   var demoLastTs = null;
   var demoRaf = null;
-  var progressIdx = 0;         // last matched segment index
+  var progressIdx = 0;         // eşleşen son segment indeksi
   var offRouteSince = null;
   var rerouting = false;
-  var announcedForStep = {};   // stepIdx -> highest announcement tier done (1=far, 2=near, 3=now)
+  var announcedForStep = {};   // stepIdx -> yapılan en yüksek anons seviyesi (1=uzak, 2=yakın, 3=şimdi)
   var voiceOn = true;
   var wakeLock = null;
   var arrived = false;
@@ -52,14 +52,14 @@
   var police = [], policeFetchAt = 0;
   var incidents = [], incidentFetchCenter = null, incidentBackoffUntil = 0;
   var trafficOn = true;
-  var warnedAt = {};        // alert id -> last warn timestamp
+  var warnedAt = {};        // uyarı id -> son uyarı zamanı
   var audioCtx = null;
   var alertHideTimer = null;
   var alertsReady = false;
 
   var $ = function (id) { return document.getElementById(id); };
 
-  // ---------------- Geometry helpers ----------------
+  // ---------------- Geometri yardımcıları ----------------
   var R = 6371000;
   function toRad(d) { return d * Math.PI / 180; }
 
@@ -80,8 +80,6 @@
     return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
   }
 
-  // Project p onto segment a-b (flat approximation, fine at street scale).
-  // Returns { t, dist, point }
   function projectToSegment(p, a, b) {
     var cosLat = Math.cos(toRad(p[1]));
     var ax = a[0] * cosLat, ay = a[1];
@@ -97,37 +95,32 @@
   }
 
   function fmtDist(m) {
-    var ft = m * 3.28084;
-    if (ft < 900) return Math.round(ft / 10) * 10 + " FT";
-    var mi = m / 1609.34;
-    return (mi < 10 ? mi.toFixed(1) : Math.round(mi)) + " MI";
+    if (m < 1000) return Math.round(m / 10) * 10 + " M";
+    var km = m / 1000;
+    return (km < 10 ? km.toFixed(1) : Math.round(km)) + " KM";
   }
 
   function fmtDistSpoken(m) {
-    var ft = m * 3.28084;
-    if (ft < 900) return Math.round(ft / 50) * 50 + " feet";
-    var mi = m / 1609.34;
-    if (mi < 0.6) return "a quarter mile";
-    if (mi < 0.85) return "half a mile";
-    if (mi < 1.5) return "one mile";
-    return Math.round(mi) + " miles";
+    if (m < 1000) return (Math.round(m / 50) * 50) + " metre";
+    var km = m / 1000;
+    if (km < 1.2) return "bir kilometre";
+    if (km < 1.7) return "bir buçuk kilometre";
+    return Math.round(km) + " kilometre";
   }
 
   function fmtDuration(s) {
     var min = Math.round(s / 60);
-    if (min < 60) return min + " MIN";
-    return Math.floor(min / 60) + " HR " + (min % 60) + " MIN";
+    if (min < 60) return min + " DK";
+    return Math.floor(min / 60) + " SA " + (min % 60) + " DK";
   }
 
   function fmtEta(sRemaining) {
     var d = new Date(Date.now() + sRemaining * 1000);
     var h = d.getHours(), m = d.getMinutes();
-    var ampm = h >= 12 ? "PM" : "AM";
-    h = h % 12; if (h === 0) h = 12;
-    return h + ":" + (m < 10 ? "0" : "") + m + " " + ampm;
+    return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
   }
 
-  // ---------------- UI helpers ----------------
+  // ---------------- Arayüz yardımcıları ----------------
   var toastTimer = null;
   function toast(msg, info) {
     var el = $("toast");
@@ -142,13 +135,14 @@
     if (!voiceOn || !window.speechSynthesis) return;
     try {
       var u = new SpeechSynthesisUtterance(text);
+      u.lang = "tr-TR";
       u.rate = 1.0;
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(u);
-    } catch (e) { /* voice is best-effort */ }
+    } catch (e) { /* sesli yönlendirme desteklenmiyorsa yoksay */ }
   }
 
-  // ---------------- Markers ----------------
+  // ---------------- İşaretçiler ----------------
   function makePlayerMarker() {
     var el = document.createElement("div");
     el.className = "player-marker";
@@ -160,9 +154,6 @@
   }
 
   function makeWaypointMarker() {
-    // GTA V-style waypoint blip, per operator's traced outline: a tall pill +
-    // a wide pill crossed, with a large circle in the middle. Stroked pass
-    // first, fill-only pass on top → one seamless outlined silhouette.
     var shapes =
       '<rect x="15.5" y="3" width="13" height="38" rx="6.5"/>' +
       '<rect x="3" y="15.5" width="38" height="13" rx="6.5"/>' +
@@ -179,7 +170,7 @@
     return new maplibregl.Marker({ element: el, anchor: "center" });
   }
 
-  // ---------------- Route layers ----------------
+  // ---------------- Rota katmanları ----------------
   function addRouteLayers() {
     map.addSource("route", { type: "geojson", data: emptyLine() });
     map.addLayer({
@@ -215,10 +206,8 @@
     });
   }
 
-  // Highway shields: a stretchable rounded-rect badge (dark outline, white
-  // ring, colored fill) that icon-text-fit wraps around each road number.
   function makeShieldImage(fill) {
-    var s = 2; // rendered at 2x for crisp edges
+    var s = 2;
     var w = 24 * s, h = 18 * s, r = 5 * s, b = 1.5 * s;
     var c = document.createElement("canvas");
     c.width = w; c.height = h;
@@ -244,8 +233,8 @@
   }
 
   function addRoadShields() {
-    var motorway = makeShieldImage("#3A66A8"); // blue — motorways
-    var aroad = makeShieldImage("#37714E");    // green — trunk/primary
+    var motorway = makeShieldImage("#3A66A8");
+    var aroad = makeShieldImage("#37714E");
     map.addImage("shield-motorway", motorway.img, motorway.meta);
     map.addImage("shield-aroad", aroad.img, aroad.meta);
     map.addLayer({
@@ -274,9 +263,9 @@
     });
   }
 
-  // ---------------- Speed cameras + police alerts ----------------
+  // ---------------- Hız kameraları + polis uyarıları ----------------
   function makeBlipIcon(bg, glyph) {
-    var s = 2, r = 30 * s / 2; // 30px blip at 2x
+    var s = 2, r = 30 * s / 2;
     var c = document.createElement("canvas");
     c.width = 30 * s; c.height = 30 * s;
     var ctx = c.getContext("2d");
@@ -315,22 +304,19 @@
     alertsReady = true;
   }
 
-  // ---------------- Live traffic (TomTom) ----------------
-  // TomTom incident iconCategory → how we treat it. Only discrete incidents get
-  // pins + alerts; plain jams are covered by the colored flow overlay.
+  // ---------------- Canlı trafik (TomTom) ----------------
   var INCIDENT_CATS = {
-    1:  { glyph: "💥", title: "ACCIDENT AHEAD", alert: true },
-    3:  { glyph: "⚠️", title: "HAZARD AHEAD", alert: true },
-    5:  { glyph: "🧊", title: "ICE ON ROAD AHEAD", alert: true },
-    7:  { glyph: "🚧", title: "LANE CLOSED AHEAD", alert: true },
-    8:  { glyph: "⛔", title: "ROAD CLOSED AHEAD", alert: true },
-    9:  { glyph: "🚧", title: "ROADWORKS AHEAD", alert: true },
-    11: { glyph: "🌊", title: "FLOODING AHEAD", alert: true },
-    14: { glyph: "🚗", title: "BROKEN-DOWN VEHICLE AHEAD", alert: true }
+    1:  { glyph: "💥", title: "İLERİDE KAZA VAR", alert: true },
+    3:  { glyph: "⚠️", title: "İLERİDE TEHLİKE VAR", alert: true },
+    5:  { glyph: "🧊", title: "İLERİDE BUZLANMA VAR", alert: true },
+    7:  { glyph: "🚧", title: "İLERİDE ŞERİT KAPALI", alert: true },
+    8:  { glyph: "⛔", title: "İLERİDE YOL KAPALI", alert: true },
+    9:  { glyph: "🚧", title: "İLERİDE YOL ÇALIŞMASI", alert: true },
+    11: { glyph: "🌊", title: "İLERİDE SU BASKINI", alert: true },
+    14: { glyph: "🚗", title: "İLERİDE ARIZALI ARAÇ", alert: true }
   };
 
   function addTrafficLayers() {
-    // Congestion flow tiles draped over the map (green→red), toggled by the button.
     map.addSource("tomtom-flow", {
       type: "raster",
       tiles: ["https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=" + TOMTOM_KEY],
@@ -378,7 +364,7 @@
     var bbox = (center[0] - d) + "," + (center[1] - d) + "," + (center[0] + d) + "," + (center[1] + d);
     var fields = encodeURIComponent("{incidents{type,geometry{type,coordinates},properties{iconCategory,magnitudeOfDelay}}}");
     var url = TOMTOM_INCIDENTS + "?bbox=" + bbox + "&fields=" + fields +
-      "&language=en-GB&timeValidityFilter=present&key=" + TOMTOM_KEY;
+      "&language=tr-TR&timeValidityFilter=present&key=" + TOMTOM_KEY;
     fetch(url)
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (data) {
@@ -386,7 +372,7 @@
         (data.incidents || []).forEach(function (f, idx) {
           var cat = f.properties && f.properties.iconCategory;
           var meta = INCIDENT_CATS[cat];
-          if (!meta) return; // skip jams/weather-only — overlay handles those
+          if (!meta) return;
           var g = f.geometry || {};
           var pos = null;
           if (g.type === "Point") pos = g.coordinates;
@@ -399,7 +385,7 @@
       })
       .catch(function () {
         incidentFetchCenter = null;
-        incidentBackoffUntil = Date.now() + 120000; // back off 2 min on error
+        incidentBackoffUntil = Date.now() + 120000;
       });
   }
 
@@ -444,12 +430,12 @@
         police = rows.map(function (r) { return { id: "pol" + r.id, pos: [r.lng, r.lat] }; });
         if (map.getSource("police")) map.getSource("police").setData(pointsFC(police));
       })
-      .catch(function () { /* reports backend offline — pins just don't update */ });
+      .catch(function () { /* bildirim sunucusu çevrimdışı */ });
   }
 
   function submitPoliceReport() {
     if (!hasGpsFix || !playerPos) {
-      toast("NEED A GPS FIX TO REPORT", true);
+      toast("BİLDİRİM İÇİN GPS KONUMU GEREKLİ", true);
       return;
     }
     fetch(SUPA_URL + "/rest/v1/ls_reports", {
@@ -464,18 +450,18 @@
     })
       .then(function (r) {
         if (!r.ok) throw new Error(r.status);
-        toast("POLICE REPORTED — DRIVERS NEARBY WILL SEE IT", true);
+        toast("POLİS BİLDİRİLDİ — YAKINDAKİ SÜRÜCÜLER GÖRECEK", true);
         police.push({ id: "local" + Date.now(), pos: playerPos.slice() });
         if (map.getSource("police")) map.getSource("police").setData(pointsFC(police));
       })
-      .catch(function () { toast("REPORTS ARE OFFLINE RIGHT NOW"); });
+      .catch(function () { toast("BİLDİRİM SERVİSİ ŞU AN ÇEVRİMDIŞI"); });
   }
 
   function unlockAudio() {
     try {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === "suspended") audioCtx.resume();
-    } catch (e) { /* no audio — beeps just won't play */ }
+    } catch (e) {}
   }
 
   function beepAlert(kind) {
@@ -495,16 +481,16 @@
         o.connect(g); g.connect(audioCtx.destination);
         o.start(t); o.stop(t + 0.2);
       }
-    } catch (e) { /* beep is best-effort */ }
+    } catch (e) {}
   }
 
   function showAlertBanner(kind, distM, item) {
     var el = $("alert-banner");
     el.classList.remove("hidden", "alert-camera", "alert-police", "alert-incident");
     var glyph, title, cls;
-    if (kind === "camera") { glyph = "📷"; title = "SPEED CAMERA AHEAD"; cls = "alert-camera"; }
-    else if (kind === "police") { glyph = "👮"; title = "POLICE REPORTED AHEAD"; cls = "alert-police"; }
-    else { glyph = (item && item.glyph) || "⚠️"; title = (item && item.title) || "INCIDENT AHEAD"; cls = "alert-incident"; }
+    if (kind === "camera") { glyph = "📷"; title = "İLERİDE HIZ KAMERASI"; cls = "alert-camera"; }
+    else if (kind === "police") { glyph = "👮"; title = "İLERİDE POLİS BİLDİRİLDİ"; cls = "alert-police"; }
+    else { glyph = (item && item.glyph) || "⚠️"; title = (item && item.title) || "İLERİDE OLAY VAR"; cls = "alert-incident"; }
     el.classList.add(cls);
     $("alert-icon").textContent = glyph;
     $("alert-title").textContent = title;
@@ -518,11 +504,10 @@
   }
 
   function spokenFor(kind, item) {
-    if (kind === "camera") return "Speed camera ahead.";
-    if (kind === "police") return "Police reported ahead.";
-    // strip trailing "AHEAD" then re-add, lowercased, for natural speech
-    var t = (item && item.title) || "Incident ahead";
-    return t.charAt(0) + t.slice(1).toLowerCase() + ".";
+    if (kind === "camera") return "İleride hız kamerası var.";
+    if (kind === "police") return "İleride polis kontrolü bildirildi.";
+    var t = (item && item.title) || "İleride trafik olayı var";
+    return t.charAt(0) + t.slice(1).toLocaleLowerCase("tr-TR") + ".";
   }
 
   function checkAlerts(pos, heading) {
@@ -542,14 +527,13 @@
         var it = items[i];
         var dM = haversine(pos, it.pos);
         if (dM > ALERT_RADIUS_M) continue;
-        // only warn for things roughly ahead (unless right on top of them)
         if (typeof heading === "number" && dM > 120 && angleDiff(bearingDeg(pos, it.pos), heading) > 85) continue;
         if (warnedAt[it.id] && now - warnedAt[it.id] < ALERT_REWARN_MS) continue;
         warnedAt[it.id] = now;
         beepAlert(kind === "camera" ? "camera" : "police");
         speak(spokenFor(kind, it));
         showAlertBanner(kind, dM, it);
-        return; // one alert at a time
+        return;
       }
     }
   }
@@ -565,14 +549,14 @@
     });
   }
 
-  // ---------------- Routing ----------------
+  // ---------------- Rotalama ----------------
   function fetchRoute(from, to, cb) {
     var url = OSRM_URL + from[0] + "," + from[1] + ";" + to[0] + "," + to[1] +
       "?overview=full&geometries=geojson&steps=true";
     fetch(url)
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (!data.routes || !data.routes.length) throw new Error("no route");
+        if (!data.routes || !data.routes.length) throw new Error("rota bulunamadı");
         var r0 = data.routes[0];
         var coords = r0.geometry.coordinates;
         var cum = [0];
@@ -584,7 +568,6 @@
         legs.forEach(function (leg) {
           (leg.steps || []).forEach(function (s) { steps.push(s); });
         });
-        // Distance-along-route for each maneuver point
         steps.forEach(function (s) {
           var loc = s.maneuver.location;
           var best = 0, bestD = Infinity;
@@ -603,7 +586,6 @@
       .catch(function (err) { cb(err); });
   }
 
-  // TomTom traffic-aware travel time + current delay for the same OD pair.
   function fetchTrafficETA(from, to, cb) {
     var url = TOMTOM_ROUTE + from[1] + "," + from[0] + ":" + to[1] + "," + to[0] +
       "/json?traffic=true&travelMode=car&key=" + TOMTOM_KEY;
@@ -611,7 +593,7 @@
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (data) {
         var s = data.routes && data.routes[0] && data.routes[0].summary;
-        if (!s) throw new Error("no summary");
+        if (!s) throw new Error("özet yok");
         cb(null, { travelSec: s.travelTimeInSeconds, delaySec: s.trafficDelayInSeconds || 0 });
       })
       .catch(function (e) { cb(e); });
@@ -621,16 +603,15 @@
     if (!waypointLngLat) return;
     fetchTrafficETA(origin, waypointLngLat, function (err, t) {
       if (err || !route) return;
-      // adopt TomTom's traffic-aware time; keep OSRM geometry/steps
       route.totalDur = t.travelSec;
       route.trafficDelaySec = t.delaySec;
       var badge = $("route-traffic");
       if (t.delaySec >= 60) {
         var mins = Math.round(t.delaySec / 60);
-        badge.textContent = "+" + mins + " MIN TRAFFIC";
+        badge.textContent = "+" + mins + " DK TRAFİK";
         badge.classList.remove("hidden");
       } else {
-        badge.textContent = "CLEAR";
+        badge.textContent = "YOL AÇIK";
         badge.classList.remove("hidden");
         badge.classList.add("clear");
       }
@@ -640,9 +621,9 @@
 
   function arrowFor(step) {
     var t = step.maneuver.type, m = step.maneuver.modifier || "";
-    if (t === "arrive") return "◉";                     // ◉
-    if (t === "roundabout" || t === "rotary") return "⟳"; // ⟳
-    if (m.indexOf("uturn") >= 0) return "↩";            // ↩
+    if (t === "arrive") return "◉";
+    if (t === "roundabout" || t === "rotary") return "⟳";
+    if (m.indexOf("uturn") >= 0) return "↩";
     if (m === "left") return "←";
     if (m === "right") return "→";
     if (m === "slight left") return "↖";
@@ -652,40 +633,50 @@
     return "↑";
   }
 
+  function translateModifier(m) {
+    if (m === "left") return "sola";
+    if (m === "right") return "sağa";
+    if (m === "slight left") return "hafif sola";
+    if (m === "slight right") return "hafif sağa";
+    if (m === "sharp left") return "keskin sola";
+    if (m === "sharp right") return "keskin sağa";
+    if (m === "straight") return "düz";
+    return m || "düz";
+  }
+
   function instructionFor(step, spoken) {
     var t = step.maneuver.type, m = step.maneuver.modifier || "";
     var name = step.name || "";
-    var onto = name ? (spoken ? " onto " + name : name) : (spoken ? "" : "");
-    if (t === "depart") return spoken ? ("Head out" + (name ? " on " + name : "")) : (name || "HEAD OUT");
-    if (t === "arrive") return spoken ? "You have arrived at your destination" : "DESTINATION";
+    var onto = name ? (spoken ? " " + name + " yönüne" : name) : "";
+    if (t === "depart") return spoken ? ("Yola çıkın" + (name ? ", " + name + " üzerinden" : "")) : (name || "YOLA ÇIKIN");
+    if (t === "arrive") return spoken ? "Varış noktanıza ulaştınız" : "VARIŞ NOKTASI";
     if (t === "roundabout" || t === "rotary") {
       var exit = step.maneuver.exit || 1;
-      return spoken ? ("At the roundabout, take exit " + exit + (name ? " onto " + name : "")) : (name || "ROUNDABOUT");
+      return spoken ? ("Döner kavşaktan " + exit + ". çıkıştan çıkın" + onto) : (name || "DÖNER KAVŞAK");
     }
-    if (m.indexOf("uturn") >= 0) return spoken ? "Make a U-turn" : (name || "U-TURN");
-    if (t === "merge") return spoken ? ("Merge " + (m || "") + onto) : (name || "MERGE");
-    if (t === "on ramp") return spoken ? ("Take the ramp" + onto) : (name || "RAMP");
-    if (t === "off ramp") return spoken ? ("Take the exit" + onto) : (name || "EXIT");
-    if (t === "fork") return spoken ? ("Keep " + (m || "straight") + onto) : (name || "FORK");
-    if (m === "straight" || t === "continue" && !m) return spoken ? ("Continue straight" + onto) : (name || "CONTINUE");
-    // default turn phrasing
-    var dir = m || "straight";
-    return spoken ? ("Turn " + dir + onto) : (name || dir.toUpperCase());
+    if (m.indexOf("uturn") >= 0) return spoken ? "U dönüşü yapın" : (name || "U DÖNÜŞÜ");
+    if (t === "merge") return spoken ? (translateModifier(m) + " şeride katılın" + onto) : (name || "ŞERİDE KATILIN");
+    if (t === "on ramp") return spoken ? ("Bağlantı yoluna girin" + onto) : (name || "BAĞLANTI YOLU");
+    if (t === "off ramp") return spoken ? ("Çıkıştan ayrılın" + onto) : (name || "ÇIKIŞ");
+    if (t === "fork") return spoken ? ("Yol ayrımından " + translateModifier(m) + " devam edin" + onto) : (name || "YOL AYRIMI");
+    if (m === "straight" || (t === "continue" && !m)) return spoken ? ("Düz devam edin" + onto) : (name || "DÜZ DEVAM EDİN");
+    var dir = translateModifier(m);
+    return spoken ? (dir + " dönün" + onto) : (name || dir.toLocaleUpperCase("tr-TR") + " DÖNÜN");
   }
 
-  // ---------------- Waypoint / route setup ----------------
+  // ---------------- Rota noktası / rota kurulumu ----------------
   function setWaypoint(lngLat, label) {
-    if (navActive) return; // don't re-target mid-drive; END first
+    if (navActive) return;
     waypointLngLat = [lngLat.lng !== undefined ? lngLat.lng : lngLat[0],
                       lngLat.lat !== undefined ? lngLat.lat : lngLat[1]];
     if (!waypointMarker) waypointMarker = makeWaypointMarker();
     waypointMarker.setLngLat(waypointLngLat).addTo(map);
-    $("to-input").value = label || "DROPPED PIN";
+    $("to-input").value = label || "İŞARETLENEN NOKTA";
     saveRecent(label, waypointLngLat);
     hideSheet();
     $("hint").classList.add("hidden");
-    $("pc-bar").classList.add("hidden"); // promo bar yields to the route panel
-    speak("Waypoint set.");
+    $("pc-bar").classList.add("hidden");
+    speak("Rota noktası belirlendi.");
     requestRoute();
   }
 
@@ -695,7 +686,7 @@
 
   function setCustomOrigin(pos, label) {
     customOrigin = pos;
-    $("from-input").value = pos ? (label || "PINNED START") : "";
+    $("from-input").value = pos ? (label || "İŞARETLENEN BAŞLANGIÇ") : "";
     if (pos) {
       if (!originMarker) {
         var el = document.createElement("div");
@@ -711,26 +702,25 @@
   }
 
   function swapEnds() {
-    if (!waypointLngLat) { toast("SET A DESTINATION FIRST", true); return; }
+    if (!waypointLngLat) { toast("ÖNCE BİR VARIŞ NOKTASI SEÇİN", true); return; }
     if (navActive) return;
     var newDest = resolveOrigin().slice();
-    var newDestLabel = customOrigin ? ($("from-input").value || "PINNED START") : "MY LOCATION";
+    var newDestLabel = customOrigin ? ($("from-input").value || "İŞARETLENEN BAŞLANGIÇ") : "KONUMUM";
     var newOrigin = waypointLngLat.slice();
-    var newOriginLabel = $("to-input").value || "DROPPED PIN";
+    var newOriginLabel = $("to-input").value || "İŞARETLENEN NOKTA";
     waypointLngLat = newDest;
     waypointMarker.setLngLat(newDest);
     $("to-input").value = newDestLabel;
-    setCustomOrigin(newOrigin, newOriginLabel); // updates marker + refetches once
+    setCustomOrigin(newOrigin, newOriginLabel);
   }
 
   function requestRoute() {
-    // mid-drive recalculations always start from where the car actually is
     var origin = (navActive && !demoActive && playerPos) ? playerPos : resolveOrigin();
     rerouting = true;
     fetchRoute(origin, waypointLngLat, function (err, r) {
       rerouting = false;
       if (err) {
-        toast("ROUTE SERVICE UNAVAILABLE — TRY AGAIN IN A MOMENT");
+        toast("ROTA SERVİSİNE ULAŞILAMIYOR — BİRAZDAN TEKRAR DENEYİN");
         return;
       }
       route = r;
@@ -738,14 +728,13 @@
       announcedForStep = {};
       setRouteGeometry(r.coords);
       $("route-time").textContent = fmtDuration(r.totalDur);
-      $("route-dist").textContent = fmtDist(r.totalDist).toLowerCase().toUpperCase();
+      $("route-dist").textContent = fmtDist(r.totalDist);
       $("route-traffic").classList.add("hidden");
       $("route-traffic").classList.remove("clear");
-      applyTrafficETA(origin); // enrich ETA with live traffic delay
+      applyTrafficETA(origin);
       if (!navActive) {
         $("route-panel").classList.remove("hidden");
         $("nav-bar").classList.add("hidden");
-        // frame the whole route
         var b = new maplibregl.LngLatBounds();
         r.coords.forEach(function (c) { b.extend(c); });
         map.fitBounds(b, { padding: { top: 140, bottom: 160, left: 50, right: 50 }, pitch: 0, bearing: 0, duration: 700 });
@@ -768,14 +757,14 @@
     renderRecents();
   }
 
-  // ---------------- From/To pickers (route panel) ----------------
+  // ---------------- Başlangıç/Varış seçicileri ----------------
   function dirSearch(q, isFrom) {
     var box = $("dir-results");
     box.innerHTML = "";
     if (isFrom) {
       var mine = document.createElement("div");
       mine.className = "search-item";
-      mine.innerHTML = '<div class="primary">◉ YOUR LOCATION</div><div class="secondary">Follow GPS</div>';
+      mine.innerHTML = '<div class="primary">◉ KONUMUNUZ</div><div class="secondary">GPS konumunu takip et</div>';
       mine.addEventListener("click", function () {
         box.classList.add("hidden");
         setCustomOrigin(null);
@@ -784,7 +773,7 @@
     }
     if (q.length >= 3) {
       var center = map.getCenter();
-      var url = NOMINATIM_URL + "?format=jsonv2&limit=5&q=" + encodeURIComponent(q) +
+      var url = NOMINATIM_URL + "?format=jsonv2&accept-language=tr&limit=5&q=" + encodeURIComponent(q) +
         "&viewbox=" + (center.lng - 1) + "," + (center.lat + 1) + "," + (center.lng + 1) + "," + (center.lat - 1) + "&bounded=0";
       fetch(url, { headers: { Accept: "application/json" } })
         .then(function (r) { return r.json(); })
@@ -826,11 +815,11 @@
     });
   }
 
-  // ---------------- Navigation ----------------
+  // ---------------- Navigasyon ----------------
   function startNav(demo) {
     if (!route) return;
     if (!demo && !hasGpsFix) {
-      toast("NO GPS SIGNAL — RUNNING DEMO DRIVE", true);
+      toast("GPS SİNYALİ YOK — DEMO SÜRÜŞ BAŞLATILIYOR", true);
       demo = true;
     }
     navActive = true;
@@ -843,11 +832,10 @@
     $("nav-bar").classList.remove("hidden");
     $("turn-banner").classList.remove("hidden");
     acquireWakeLock();
-    speak("Route started.");
+    speak("Rota başlatıldı.");
     fetchCameras(demoActive ? route.coords[0] : (playerPos || route.coords[0]));
     fetchPolice(demoActive ? route.coords[0] : (playerPos || route.coords[0]));
     if (demoActive) {
-      // start from the beginning of the route
       demoTraveled = 0;
       demoLastTs = null;
       if (!playerMarker) { playerMarker = makePlayerMarker(); playerMarker.setLngLat(route.coords[0]).addTo(map); }
@@ -865,9 +853,8 @@
     $("nav-bar").classList.add("hidden");
     $("turn-banner").classList.add("hidden");
     releaseWakeLock();
-    if (!silent) speak("Route ended.");
+    if (!silent) speak("Rota sonlandırıldı.");
     if (route) {
-      // back to overview state with the route still shown
       $("route-panel").classList.remove("hidden");
       map.easeTo({ pitch: 0, bearing: 0, duration: 600 });
     }
@@ -882,7 +869,6 @@
     var total = route.cum[route.cum.length - 1];
     if (demoTraveled >= total) demoTraveled = total;
 
-    // interpolate position along the polyline
     var cum = route.cum, coords = route.coords;
     var i = progressIdx;
     while (i < cum.length - 2 && cum[i + 1] < demoTraveled) i++;
@@ -901,7 +887,6 @@
     if (demoTraveled < total) demoRaf = requestAnimationFrame(demoTick);
   }
 
-  // Core per-position update. traveledOverride is provided by demo mode.
   function updateNavigation(pos, heading, speedMps, traveledOverride) {
     if (!route || !navActive || arrived) return;
 
@@ -914,7 +899,6 @@
     if (traveledOverride !== undefined) {
       traveled = traveledOverride;
     } else {
-      // match GPS position to the route
       var best = { dist: Infinity, idx: 0, t: 0 };
       var from = Math.max(0, progressIdx - 3);
       var to = Math.min(route.coords.length - 2, progressIdx + 60);
@@ -931,14 +915,14 @@
     var total = route.cum[route.cum.length - 1];
     var remaining = Math.max(0, total - traveled);
 
-    // --- off-route detection (GPS mode only) ---
+    // --- rotadan çıkma kontrolü ---
     if (traveledOverride === undefined) {
       if (offDist > OFF_ROUTE_METERS) {
         if (!offRouteSince) offRouteSince = Date.now();
         else if (Date.now() - offRouteSince > OFF_ROUTE_SECONDS * 1000 && !rerouting) {
           offRouteSince = null;
-          toast("RECALCULATING…", true);
-          speak("Recalculating.");
+          toast("ROTA YENİDEN HESAPLANIYOR…", true);
+          speak("Rota yeniden hesaplanıyor.");
           requestRoute();
           return;
         }
@@ -947,7 +931,7 @@
       }
     }
 
-    // --- find upcoming maneuver ---
+    // --- yaklaşan manevra ---
     var upcoming = null, upcomingIdx = -1;
     for (var s = 0; s < route.steps.length; s++) {
       if (route.steps[s]._distAlong > traveled + 4) { upcoming = route.steps[s]; upcomingIdx = s; break; }
@@ -959,7 +943,7 @@
     $("turn-dist").textContent = fmtDist(distToTurn);
     $("turn-street").textContent = instructionFor(upcoming, false);
 
-    // --- voice announcements: far (~0.5mi), near (~600ft), now (~100ft) ---
+    // --- sesli uyarılar ---
     var tier = announcedForStep[upcomingIdx] || 0;
     if (upcoming.maneuver.type !== "depart") {
       if (distToTurn < 40 && tier < 3) {
@@ -967,20 +951,20 @@
         speak(instructionFor(upcoming, true));
       } else if (distToTurn < 210 && tier < 2) {
         announcedForStep[upcomingIdx] = 2;
-        speak("In " + fmtDistSpoken(distToTurn) + ", " + instructionFor(upcoming, true).toLowerCase());
+        speak(fmtDistSpoken(distToTurn) + " sonra, " + instructionFor(upcoming, true).toLocaleLowerCase("tr-TR"));
       } else if (distToTurn < 900 && distToTurn > 300 && tier < 1) {
         announcedForStep[upcomingIdx] = 1;
-        speak("In " + fmtDistSpoken(distToTurn) + ", " + instructionFor(upcoming, true).toLowerCase());
+        speak(fmtDistSpoken(distToTurn) + " sonra, " + instructionFor(upcoming, true).toLocaleLowerCase("tr-TR"));
       }
     }
 
-    // --- bottom bar ---
+    // --- alt bilgi çubuğu ---
     var remainingDur = route.totalDur * (remaining / Math.max(1, route.totalDist));
     $("nav-eta").textContent = fmtEta(remainingDur);
     $("nav-remaining").textContent = fmtDist(remaining);
-    $("nav-speed").textContent = Math.round((speedMps || 0) * 2.23694);
+    $("nav-speed").textContent = Math.round((speedMps || 0) * 3.6);
 
-    // --- camera follow ---
+    // --- kamera takibi ---
     if (following) {
       map.easeTo({
         center: pos,
@@ -992,11 +976,11 @@
       });
     }
 
-    // --- arrival ---
+    // --- varış ---
     if (remaining < ARRIVE_METERS) {
       arrived = true;
       $("arrive").classList.remove("hidden");
-      speak("You have arrived at your destination.");
+      speak("Varış noktanıza ulaştınız.");
       setTimeout(function () {
         $("arrive").classList.add("hidden");
         stopNav(true);
@@ -1008,7 +992,7 @@
   // ---------------- GPS ----------------
   function startGps() {
     if (!navigator.geolocation) {
-      toast("NO GPS ON THIS DEVICE — TAP MAP + DEMO DRIVE STILL WORK", true);
+      toast("BU CİHAZDA GPS YOK — HARİTAYA DOKUNARAK DEMO SÜRÜŞ KULLANABİLİRSİNİZ", true);
       return;
     }
     navigator.geolocation.watchPosition(function (p) {
@@ -1034,7 +1018,7 @@
       }
       if (firstFix) {
         map.easeTo({ center: pos, zoom: 15, duration: 800 });
-        toast("GPS LOCKED", true);
+        toast("GPS BAĞLANDI", true);
       }
       if (navActive && !demoActive) {
         updateNavigation(pos, playerHeading, playerSpeedMps);
@@ -1043,12 +1027,12 @@
         checkAlerts(pos, playerHeading);
         updateFreeDriveHud(pos, playerSpeedMps);
       }
-    }, function (err) {
-      if (!hasGpsFix) toast("GPS UNAVAILABLE — TAP MAP + DEMO DRIVE STILL WORK", true);
+    }, function () {
+      if (!hasGpsFix) toast("GPS ALINAMIYOR — HARİTAYA DOKUNARAK DEMO SÜRÜŞ KULLANABİLİRSİNİZ", true);
     }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
   }
 
-  // ---------------- Wake lock ----------------
+  // ---------------- Ekran uyanık tutma ----------------
   function acquireWakeLock() {
     if (!navigator.wakeLock) return;
     navigator.wakeLock.request("screen").then(function (wl) { wakeLock = wl; }).catch(function () {});
@@ -1060,9 +1044,9 @@
     if (document.visibilityState === "visible" && navActive) acquireWakeLock();
   });
 
-  // ---------------- Bottom sheet: search, recents, saved places ----------------
+  // ---------------- Alt çekmece: arama, son aramalar, kayıtlı yerler ----------------
   var searchTimer = null;
-  var chipAssign = null; // 'home' | 'work' while picking a place for a chip
+  var chipAssign = null; // 'home' | 'work'
 
   function loadJson(key, fallback) {
     try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch (e) { return fallback; }
@@ -1071,7 +1055,7 @@
   function getRecents() { return loadJson("lsmaps-recents", []); }
 
   function saveRecent(label, lngLat) {
-    if (!label || label === "DROPPED PIN" || label === "MY LOCATION" || label === "PINNED START") return;
+    if (!label || label === "İŞARETLENEN NOKTA" || label === "KONUMUM" || label === "İŞARETLENEN BAŞLANGIÇ") return;
     var rec = getRecents().filter(function (r) { return r.label !== label; });
     rec.unshift({ label: label, lng: lngLat[0], lat: lngLat[1] });
     try { localStorage.setItem("lsmaps-recents", JSON.stringify(rec.slice(0, 6))); } catch (e) {}
@@ -1088,8 +1072,8 @@
 
   function refreshChips() {
     var p = getPlaces();
-    $("chip-home").innerHTML = "&#127968; " + (p.home ? "HOME" : "SET HOME");
-    $("chip-work").innerHTML = "&#128188; " + (p.work ? "WORK" : "SET WORK");
+    $("chip-home").innerHTML = "&#127968; " + (p.home ? "EV" : "EVİ AYARLA");
+    $("chip-work").innerHTML = "&#128188; " + (p.work ? "İŞ" : "İŞİ AYARLA");
   }
 
   function openSheet(expand) {
@@ -1131,10 +1115,10 @@
   function pickDestination(lngLat, label) {
     if (chipAssign) {
       savePlace(chipAssign, label, lngLat);
-      toast((chipAssign === "home" ? "HOME" : "WORK") + " SAVED — TAP THE CHIP TO GO", true);
+      toast((chipAssign === "home" ? "EV" : "İŞ") + " KAYDEDİLDİ — GİTMEK İÇİN DOKUNUN", true);
       chipAssign = null;
       $("search").value = "";
-      $("search").placeholder = "WHERE TO?";
+      $("search").placeholder = "NEREYE?";
       renderRecents();
       return;
     }
@@ -1147,17 +1131,19 @@
     var p = getPlaces()[slot];
     if (p && !chipAssign) { pickDestination([p.lng, p.lat], p.label); return; }
     chipAssign = slot;
-    $("search").placeholder = "SEARCH A PLACE TO SET " + slot.toUpperCase();
+    var slotName = slot === "home" ? "EV" : "İŞ";
+    $("search").placeholder = slotName + " ADRESİ İÇİN YER ARAYIN";
     openSheet(true);
     $("search").focus();
   }
 
   function chipReassign(slot) {
     chipAssign = slot;
-    $("search").placeholder = "SEARCH A NEW PLACE FOR " + slot.toUpperCase();
+    var slotName = slot === "home" ? "EV" : "İŞ";
+    $("search").placeholder = "YENİ " + slotName + " ADRESİ ARAYIN";
     openSheet(true);
     $("search").focus();
-    toast("PICK THE NEW " + slot.toUpperCase() + " FROM SEARCH", true);
+    toast("ARAMADAN YENİ " + slotName + " KONUMUNU SEÇİN", true);
   }
 
   function onSearchInput() {
@@ -1168,7 +1154,7 @@
     if (q.length < 3) { renderRecents(); return; }
     searchTimer = setTimeout(function () {
       var center = map.getCenter();
-      var url = NOMINATIM_URL + "?format=jsonv2&limit=5&q=" + encodeURIComponent(q) +
+      var url = NOMINATIM_URL + "?format=jsonv2&accept-language=tr&limit=5&q=" + encodeURIComponent(q) +
         "&viewbox=" + (center.lng - 1) + "," + (center.lat + 1) + "," + (center.lng + 1) + "," + (center.lat - 1) + "&bounded=0";
       fetch(url, { headers: { "Accept": "application/json" } })
         .then(function (r) { return r.json(); })
@@ -1183,49 +1169,44 @@
             }));
           });
         })
-        .catch(function () { toast("SEARCH UNAVAILABLE RIGHT NOW"); });
+        .catch(function () { toast("ARAMA ŞU AN KULLANILAMIYOR"); });
     }, 450);
   }
 
-  // ---------------- Free-drive HUD: speed bubble + current street + speed limit ----------------
+  // ---------------- Serbest sürüş HUD: hız balonu + sokak adı + hız sınırı ----------------
   var streetFetchAt = 0, streetFetchPos = null;
-  var limitFetchAt = 0, limitFetchPos = null, currentLimitMph = null;
+  var limitFetchAt = 0, limitFetchPos = null, currentLimitKmh = null;
 
-  // OSM maxspeed tag → mph number (UK/US use mph; bare/other units converted).
-  function parseMaxspeedMph(v) {
+  // OSM maxspeed etiketi -> km/s
+  function parseMaxspeedKmh(v) {
     if (!v) return null;
     v = String(v).toLowerCase().trim();
     if (v.indexOf("national") >= 0 || v.indexOf("walk") >= 0 || v.indexOf("none") >= 0 || v.indexOf("signal") >= 0) return null;
     var mph = v.match(/(\d+)\s*mph/);
-    if (mph) return +mph[1];
+    if (mph) return Math.round(+mph[1] * 1.60934);
     var kmh = v.match(/(\d+)\s*km\/?h/);
-    if (kmh) return Math.round(+kmh[1] / 1.60934);
+    if (kmh) return +kmh[1];
     var bare = v.match(/^(\d+)$/);
-    if (bare) return Math.round(+bare[1] / 1.60934); // bare number is km/h by OSM convention
+    if (bare) return +bare[1];
     return null;
   }
 
-  // Resolve a road's limit even without an explicit maxspeed tag:
-  // maxspeed → maxspeed:type/source (GB zones + national limits) → lit-road rule.
-  function inferLimitMph(tags) {
-    var explicit = parseMaxspeedMph(tags.maxspeed);
+  function inferLimitKmh(tags) {
+    var explicit = parseMaxspeedKmh(tags.maxspeed);
     if (explicit) return explicit;
     var type = ((tags["maxspeed:type"] || tags["source:maxspeed"]) || "").toLowerCase();
     if (type) {
-      if (type.indexOf("nsl_dual") >= 0 || type.indexOf("motorway") >= 0) return 70;
-      if (type.indexOf("nsl_single") >= 0) return 60;
-      if (type.indexOf("nsl_restricted") >= 0 || type.indexOf("urban") >= 0) return 30;
-      var z = type.match(/zone:?(\d+)/); // GB 20/30 zones are already mph
+      if (type.indexOf("motorway") >= 0) return 130;
+      if (type.indexOf("nsl_dual") >= 0 || type.indexOf("trunk") >= 0) return 110;
+      if (type.indexOf("nsl_single") >= 0 || type.indexOf("rural") >= 0) return 90;
+      if (type.indexOf("nsl_restricted") >= 0 || type.indexOf("urban") >= 0) return 50;
+      var z = type.match(/zone:?(\d+)/);
       if (z) return +z[1];
     }
     if (tags.highway === "living_street") return 20;
-    // No explicit limit and no limit-type tag → unknown. We deliberately do NOT
-    // guess from street lighting: many UK areas are now 20 mph, so a "lit road =
-    // 30" guess produces confident-wrong signs. Blank beats wrong.
     return null;
   }
 
-  // Nearest point on a road's polyline + that segment's bearing (for heading match).
   function nearestWayInfo(pos, geom) {
     var best = { dist: Infinity, bearing: null };
     for (var i = 0; i < geom.length - 1; i++) {
@@ -1237,20 +1218,19 @@
     return best;
   }
 
-  function setLimitSign(mph) {
-    currentLimitMph = mph;
+  function setLimitSign(kmh) {
+    currentLimitKmh = kmh;
     var sign = $("limit-sign");
-    if (mph) { $("limit-val").textContent = mph; sign.classList.remove("hidden"); }
+    if (kmh) { $("limit-val").textContent = kmh; sign.classList.remove("hidden"); }
     else { sign.classList.add("hidden"); }
   }
 
   function maybeSpeedLimit(pos, heading) {
     var now = Date.now();
     if (now - limitFetchAt < 6000) return;
-    if (limitFetchPos && haversine(pos, limitFetchPos) < 30) return; // re-check sooner after a turn
+    if (limitFetchPos && haversine(pos, limitFetchPos) < 30) return;
     limitFetchAt = now;
     limitFetchPos = pos.slice();
-    // all drivable roads nearby (with the tags needed to infer a limit), not just tagged ones
     var q = "[out:json][timeout:10];way(around:40," + pos[1] + "," + pos[0] +
       ')[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"];out tags geom 30;';
     fetch(OVERPASS_URL, {
@@ -1263,23 +1243,22 @@
         var best = null, bestScore = Infinity;
         (data.elements || []).forEach(function (w) {
           if (!w.geometry || !w.tags) return;
-          var mph = inferLimitMph(w.tags);
-          if (!mph) return;
+          var kmh = inferLimitKmh(w.tags);
+          if (!kmh) return;
           var info = nearestWayInfo(pos, w.geometry);
           if (info.dist > 42) return;
           var score = info.dist;
-          // penalise roads whose direction disagrees with travel (junctions, parallels)
           if (typeof heading === "number" && info.bearing != null) {
             var d = Math.abs(((info.bearing - heading) % 360 + 360) % 360);
             if (d > 180) d = 360 - d;
-            if (d > 90) d = 180 - d; // roads are bidirectional → 0..90
+            if (d > 90) d = 180 - d;
             score += (d / 90) * 18;
           }
-          if (score < bestScore) { bestScore = score; best = mph; }
+          if (score < bestScore) { bestScore = score; best = kmh; }
         });
         setLimitSign(best);
       })
-      .catch(function () { /* keep last known limit */ });
+      .catch(function () {});
   }
 
   function maybeStreetName(pos) {
@@ -1288,13 +1267,13 @@
     if (streetFetchPos && haversine(pos, streetFetchPos) < 80) return;
     streetFetchAt = now;
     streetFetchPos = pos.slice();
-    fetch("https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=17&lat=" + pos[1] + "&lon=" + pos[0],
+    fetch("https://nominatim.openstreetmap.org/reverse?format=jsonv2&accept-language=tr&zoom=17&lat=" + pos[1] + "&lon=" + pos[0],
       { headers: { Accept: "application/json" } })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         var road = d.address && (d.address.road || d.address.pedestrian || d.address.neighbourhood);
         if (road) {
-          $("street-pill").textContent = road.toUpperCase();
+          $("street-pill").textContent = road.toLocaleUpperCase("tr-TR");
           $("street-pill").classList.remove("hidden");
         }
       })
@@ -1302,32 +1281,32 @@
   }
 
   function updateFreeDriveHud(pos, speedMps) {
-    var mph = Math.round((speedMps || 0) * 2.23694);
+    var kmh = Math.round((speedMps || 0) * 3.6);
     if (!navActive) {
-      $("speed-val").textContent = mph;
+      $("speed-val").textContent = kmh;
       $("speed-bubble").classList.remove("hidden");
     }
-    // over-limit warning: tint the speed number red (5 mph tolerance)
-    var over = currentLimitMph && mph > currentLimitMph + 5;
+    // hız sınırı aşımı uyarısı (8 km/s tolerans)
+    var over = currentLimitKmh && kmh > currentLimitKmh + 8;
     $("speed-val").classList.toggle("over", !!over);
     maybeStreetName(pos);
     maybeSpeedLimit(pos, playerHeading);
   }
 
-  // ---------------- Nearby categories (Overpass POIs) ----------------
+  // ---------------- Yakındaki kategoriler ----------------
   var CATEGORIES = [
-    { key: "fuel",       label: "Fuel",        glyph: "⛽", sel: ['node["amenity"="fuel"]', 'way["amenity"="fuel"]'], radius: 6000, fuel: true },
-    { key: "food",       label: "Food",        glyph: "🍴", sel: ['node["amenity"~"restaurant|fast_food"]', 'way["amenity"~"restaurant|fast_food"]'], radius: 4000 },
-    { key: "parking",    label: "Parking",     glyph: "🅿️", sel: ['node["amenity"="parking"]["access"!="private"]', 'way["amenity"="parking"]["access"!="private"]'], radius: 3000 },
-    { key: "groceries",  label: "Groceries",   glyph: "🛒", sel: ['node["shop"~"supermarket|convenience"]', 'way["shop"~"supermarket|convenience"]'], radius: 4000 },
-    { key: "coffee",     label: "Coffee",      glyph: "☕", sel: ['node["amenity"="cafe"]', 'way["amenity"="cafe"]'], radius: 4000 },
-    { key: "shopping",   label: "Shopping",    glyph: "🛍️", sel: ['node["shop"~"mall|department_store"]', 'way["shop"~"mall|department_store"]'], radius: 7000 },
-    { key: "pharmacies", label: "Pharmacies",  glyph: "💊", sel: ['node["amenity"="pharmacy"]', 'way["amenity"="pharmacy"]'], radius: 5000 },
-    { key: "ev",         label: "EV charging", glyph: "🔌", sel: ['node["amenity"="charging_station"]', 'way["amenity"="charging_station"]'], radius: 7000 },
-    { key: "hospitals",  label: "Hospitals",   glyph: "🏥", sel: ['node["amenity"="hospital"]', 'way["amenity"="hospital"]'], radius: 12000 },
-    { key: "hotels",     label: "Hotels",      glyph: "🏨", sel: ['node["tourism"="hotel"]', 'way["tourism"="hotel"]'], radius: 8000 },
-    { key: "parks",      label: "Parks",       glyph: "🌳", sel: ['node["leisure"="park"]', 'way["leisure"="park"]'], radius: 5000 },
-    { key: "crisis",     label: "Crisis",      glyph: "🆘", sel: ['node["amenity"~"police|hospital|fire_station"]', 'way["amenity"~"police|hospital|fire_station"]'], radius: 14000 }
+    { key: "fuel",       label: "Akaryakıt",       glyph: "⛽", sel: ['node["amenity"="fuel"]', 'way["amenity"="fuel"]'], radius: 6000, fuel: true },
+    { key: "food",       label: "Yemek",           glyph: "🍴", sel: ['node["amenity"~"restaurant|fast_food"]', 'way["amenity"~"restaurant|fast_food"]'], radius: 4000 },
+    { key: "parking",    label: "Otopark",         glyph: "🅿️", sel: ['node["amenity"="parking"]["access"!="private"]', 'way["amenity"="parking"]["access"!="private"]'], radius: 3000 },
+    { key: "groceries",  label: "Market",          glyph: "🛒", sel: ['node["shop"~"supermarket|convenience"]', 'way["shop"~"supermarket|convenience"]'], radius: 4000 },
+    { key: "coffee",     label: "Kafe",            glyph: "☕", sel: ['node["amenity"="cafe"]', 'way["amenity"="cafe"]'], radius: 4000 },
+    { key: "shopping",   label: "Alışveriş",       glyph: "🛍️", sel: ['node["shop"~"mall|department_store"]', 'way["shop"~"mall|department_store"]'], radius: 7000 },
+    { key: "pharmacies", label: "Eczane",          glyph: "💊", sel: ['node["amenity"="pharmacy"]', 'way["amenity"="pharmacy"]'], radius: 5000 },
+    { key: "ev",         label: "Şarj İstasyonu",  glyph: "🔌", sel: ['node["amenity"="charging_station"]', 'way["amenity"="charging_station"]'], radius: 7000 },
+    { key: "hospitals",  label: "Hastane",         glyph: "🏥", sel: ['node["amenity"="hospital"]', 'way["amenity"="hospital"]'], radius: 12000 },
+    { key: "hotels",     label: "Otel",            glyph: "🏨", sel: ['node["tourism"="hotel"]', 'way["tourism"="hotel"]'], radius: 8000 },
+    { key: "parks",      label: "Park",            glyph: "🌳", sel: ['node["leisure"="park"]', 'way["leisure"="park"]'], radius: 5000 },
+    { key: "crisis",     label: "Acil Durum",      glyph: "🆘", sel: ['node["amenity"~"police|hospital|fire_station"]', 'way["amenity"~"police|hospital|fire_station"]'], radius: 14000 }
   ];
   function catByKey(k) { for (var i = 0; i < CATEGORIES.length; i++) if (CATEGORIES[i].key === k) return CATEGORIES[i]; return null; }
 
@@ -1346,13 +1325,13 @@
     });
     return out;
   }
-  // Pragmatic OSM opening_hours evaluator → 'open' | 'closed' | 'unknown'
+
   function parseOpenState(oh) {
     if (!oh) return "unknown";
     oh = oh.trim();
     if (/24\s*\/\s*7/.test(oh) || /00:00-24:00/.test(oh) && !/;/.test(oh) && !/Mo|Tu|We|Th|Fr|Sa|Su/.test(oh)) return "open";
     var now = new Date();
-    var today = now.getDay() === 0 ? 6 : now.getDay() - 1; // Mo=0..Su=6
+    var today = now.getDay() === 0 ? 6 : now.getDay() - 1;
     var mins = now.getHours() * 60 + now.getMinutes();
     var rules = oh.split(";");
     var parseable = false, openNow = false;
@@ -1362,7 +1341,7 @@
       var mDays = rule.match(/^((?:Mo|Tu|We|Th|Fr|Sa|Su)(?:\s*[-,]\s*(?:Mo|Tu|We|Th|Fr|Sa|Su))*)/);
       var days = null, rest = rule;
       if (mDays) { days = expandDays(mDays[1]); rest = rule.slice(mDays[1].length).trim(); }
-      if (days && days.indexOf(today) < 0) continue; // rule not for today
+      if (days && days.indexOf(today) < 0) continue;
       if (/off|closed/i.test(rest)) { parseable = true; continue; }
       var times = rest.match(/\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}/g);
       if (!times) continue;
@@ -1383,8 +1362,6 @@
   var fuelPrices = null, fuelPricesTried = false;
 
   function loadFuelPrices() {
-    // Prices are generated server-side by a GitHub Action into data/fuel_prices.json
-    // (the UK CMA retailer feeds block direct browser access via CORS).
     if (fuelPricesTried) return Promise.resolve(fuelPrices);
     fuelPricesTried = true;
     return fetch("data/fuel_prices.json")
@@ -1395,7 +1372,7 @@
 
   function matchFuelPrice(pos) {
     if (!fuelPrices) return null;
-    var best = null, bestD = 250; // within 250 m of the OSM station
+    var best = null, bestD = 250;
     for (var i = 0; i < fuelPrices.length; i++) {
       var s = fuelPrices[i];
       if (typeof s.lat !== "number" || typeof s.lng !== "number") continue;
@@ -1403,7 +1380,7 @@
       if (d < bestD) { bestD = d; best = s; }
     }
     if (!best || !best.e10) return null;
-    return "£" + (best.e10 / 100).toFixed(2); // pence → pounds/litre, unleaded E10
+    return "£" + (best.e10 / 100).toFixed(2);
   }
 
   function goToPlace(pos, name) {
@@ -1417,8 +1394,8 @@
   function placeRow(p) {
     var div = document.createElement("div");
     div.className = "search-item place-item";
-    var badge = p.status === "open" ? '<span class="st-open">OPEN</span>'
-      : p.status === "closed" ? '<span class="st-closed">CLOSED</span>' : "";
+    var badge = p.status === "open" ? '<span class="st-open">AÇIK</span>'
+      : p.status === "closed" ? '<span class="st-closed">KAPALI</span>' : "";
     var price = p.price ? '<span class="st-price">' + escapeHtml(p.price) + "</span>" : "";
     div.innerHTML =
       '<div class="place-main"><div class="primary">' + p.glyph + " " + escapeHtml(p.name) + "</div>" +
@@ -1432,7 +1409,7 @@
     $("recents-label").classList.add("hidden");
     var head = $("results-head");
     head.classList.remove("hidden");
-    $("results-title").textContent = cat.glyph + " " + cat.label.toUpperCase() + " NEAR YOU";
+    $("results-title").textContent = cat.glyph + " YAKINDAKİ " + cat.label.toLocaleUpperCase("tr-TR");
   }
 
   function runCategory(catKey) {
@@ -1442,7 +1419,7 @@
     openSheet(true);
     showResultsHeader(cat);
     var box = $("search-results");
-    box.innerHTML = '<div class="place-loading">Finding ' + cat.label.toLowerCase() + " near you…</div>";
+    box.innerHTML = '<div class="place-loading">Yakındaki ' + cat.label.toLocaleLowerCase("tr-TR") + " noktaları aranıyor…</div>";
     var center = playerPos || map.getCenter().toArray();
     var token = ++catFetchToken;
     var around = cat.sel.map(function (s) { return s + "(around:" + cat.radius + "," + center[1] + "," + center[0] + ");"; }).join("");
@@ -1456,7 +1433,7 @@
       .then(function (r) { return r.json(); })
       .then(function (data) { return pricesReady.then(function () { return data; }); })
       .then(function (data) {
-        if (token !== catFetchToken) return; // superseded by a newer category tap
+        if (token !== catFetchToken) return;
         var places = [];
         (data.elements || []).forEach(function (el) {
           var t = el.tags || {};
@@ -1470,7 +1447,6 @@
             price: cat.fuel ? matchFuelPrice(pos) : null
           });
         });
-        // de-dupe by name+rounded position, sort by distance, cap at 20
         var seen = {}, uniq = [];
         places.sort(function (a, b) { return a.dist - b.dist; });
         places.forEach(function (p) {
@@ -1479,12 +1455,12 @@
         });
         uniq = uniq.slice(0, 20);
         box.innerHTML = "";
-        if (!uniq.length) { box.innerHTML = '<div class="place-loading">Nothing found nearby.</div>'; return; }
+        if (!uniq.length) { box.innerHTML = '<div class="place-loading">Yakında sonuç bulunamadı.</div>'; return; }
         uniq.forEach(function (p) { box.appendChild(placeRow(p)); });
       })
       .catch(function () {
         if (token !== catFetchToken) return;
-        box.innerHTML = '<div class="place-loading">Couldn’t load places — try again.</div>';
+        box.innerHTML = '<div class="place-loading">Yerler yüklenemedi — tekrar deneyin.</div>';
       });
   }
 
@@ -1518,7 +1494,7 @@
     });
   }
 
-  // ---------------- Mobile-only gate ----------------
+  // ---------------- Mobil cihaz kontrolü ----------------
   function isStandalone() {
     return (window.matchMedia && matchMedia("(display-mode: standalone)").matches) ||
            window.navigator.standalone === true;
@@ -1530,8 +1506,6 @@
     return touch && coarse;
   }
 
-  // Waze-style desktop companion: full map works with a mouse, plus a promo
-  // bar whose button pops a QR modal for sending the app to a phone.
   function setupDesktopBar() {
     var qrBuilt = false;
     $("pc-bar").classList.remove("hidden");
@@ -1562,19 +1536,17 @@
     });
   }
 
-  // Shown when WebGL is unavailable (e.g. hardware acceleration disabled) —
-  // the one case where the map engine cannot start at all.
   function showMapError() {
     $("hint").classList.add("hidden");
     var div = document.createElement("div");
     div.className = "map-error";
     div.innerHTML =
       '<div class="map-error-card">' +
-      '<div class="gate-title">MAP CAN’T RENDER HERE</div>' +
-      '<div class="map-error-text">This browser has graphics acceleration (WebGL) switched off, ' +
-      "which the map needs. Turn on hardware acceleration in your browser settings — " +
-      "or just use LS Maps on your phone.</div>" +
-      '<button id="map-error-send" class="btn-send">SEND TO YOUR PHONE</button>' +
+      '<div class="gate-title">HARİTA BURADA AÇILAMIYOR</div>' +
+      '<div class="map-error-text">Bu tarayıcıda donanım hızlandırma (WebGL) kapalı olduğu için ' +
+      "harita motoru başlatılamıyor. Tarayıcı ayarlarından donanım hızlandırmayı açın " +
+      "veya uygulamayı telefonunuzda kullanın.</div>" +
+      '<button id="map-error-send" class="btn-send">TELEFONA GÖNDER</button>' +
       "</div>";
     document.body.appendChild(div);
     var sendBtn = $("btn-send");
@@ -1583,7 +1555,7 @@
     });
   }
 
-  // ---------------- Init ----------------
+  // ---------------- Başlatma ----------------
   function init() {
     if (!isMobileDevice() && !isStandalone()) setupDesktopBar();
 
@@ -1605,11 +1577,11 @@
     }
     map.addControl(new maplibregl.AttributionControl({
       compact: true,
-      customAttribution: "&copy; OpenStreetMap contributors &middot; OpenFreeMap &middot; OSRM"
+      customAttribution: "&copy; OpenStreetMap katkıda bulunanları &middot; OpenFreeMap &middot; OSRM"
     }), "bottom-left");
 
-    window.__lsmap = map; // debug handle
-    window.__lsdebug = { // test hooks for the alert pipeline
+    window.__lsmap = map;
+    window.__lsdebug = {
       injectCamera: function (lng, lat) {
         cameras.push({ id: "dbg-cam" + Date.now(), pos: [lng, lat] });
         if (map.getSource("cameras")) map.getSource("cameras").setData(pointsFC(cameras));
@@ -1620,7 +1592,7 @@
       },
       injectIncident: function (lng, lat, title, glyph) {
         incidents.push({ id: "dbg-inc" + Date.now(), pos: [lng, lat], kind: "incident",
-          title: title || "ACCIDENT AHEAD", glyph: glyph || "💥" });
+          title: title || "İLERİDE KAZA VAR", glyph: glyph || "💥" });
         if (map.getSource("incidents")) map.getSource("incidents").setData(pointsFC(incidents));
       },
       trafficState: function () { return { trafficOn: trafficOn, incidents: incidents.length }; }
@@ -1632,18 +1604,15 @@
       addAlertLayers();
       addTrafficLayers();
       startGps();
-      // seed traffic where the map opens so overlay + incidents show pre-GPS
       fetchIncidents(map.getCenter().toArray());
-      // one-time install hint for iPhone Safari users
       var isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
       if (isIos && !isStandalone() && !localStorage.getItem("lsmaps-install-hint")) {
         localStorage.setItem("lsmaps-install-hint", "1");
-        setTimeout(function () { toast("INSTALL: SHARE → ADD TO HOME SCREEN", true); }, 2500);
+        setTimeout(function () { toast("YÜKLE: PAYLAŞ → ANA EKRANA EKLE", true); }, 2500);
       }
     });
 
     map.on("click", function (e) {
-      // taps on HUD elements never reach the map, so this is a genuine map tap
       if ($("sheet").classList.contains("open")) {
         collapseSheet();
         renderRecents();
@@ -1661,9 +1630,9 @@
     $("btn-recenter").addEventListener("click", function () {
       following = true;
       var target = navActive && demoActive ? null : playerPos;
-      if (navActive) return; // follow resumes on next tick
+      if (navActive) return;
       if (target) map.easeTo({ center: target, zoom: 15, duration: 600 });
-      else toast("NO GPS FIX YET", true);
+      else toast("HENÜZ GPS KONUMU ALINAMADI", true);
     });
     $("btn-north").addEventListener("click", function () {
       following = false;
@@ -1671,12 +1640,12 @@
     });
     $("btn-traffic").addEventListener("click", function () {
       setTraffic(!trafficOn);
-      toast(trafficOn ? "LIVE TRAFFIC ON" : "LIVE TRAFFIC OFF", true);
+      toast(trafficOn ? "CANLI TRAFİK AÇIK" : "CANLI TRAFİK KAPALI", true);
     });
     $("btn-voice").addEventListener("click", function () {
       voiceOn = !voiceOn;
       this.classList.toggle("off", !voiceOn);
-      toast(voiceOn ? "VOICE ON" : "VOICE OFF", true);
+      toast(voiceOn ? "SESLİ YÖNLENDİRME AÇIK" : "SESLİ YÖNLENDİRME KAPALI", true);
       if (!voiceOn && window.speechSynthesis) window.speechSynthesis.cancel();
     });
     $("search").addEventListener("input", onSearchInput);
@@ -1693,7 +1662,6 @@
     refreshChips();
     renderRecents();
 
-    // category presets + full category screen
     var presets = document.querySelectorAll("#cat-presets .cat-chip[data-cat]");
     Array.prototype.forEach.call(presets, function (btn) {
       btn.addEventListener("click", function () { runCategory(btn.getAttribute("data-cat")); });
@@ -1718,7 +1686,6 @@
       $("report-sheet").classList.add("hidden");
     });
 
-    // browsers only allow sound after a first tap — arm the beeper early
     document.addEventListener("pointerdown", unlockAudio, { once: true });
   }
 
