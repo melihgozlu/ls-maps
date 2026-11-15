@@ -1,4 +1,4 @@
-// LS Maps — GTA tarzı görünüme sahip Waze benzeri navigasyon.
+// GTA Map — GTA tarzı görünüme sahip Waze benzeri navigasyon.
 // Ücretsiz servisler: OpenFreeMap (harita karoları), OSRM demo sunucusu (rotalama), Nominatim (arama).
 
 (function () {
@@ -773,7 +773,7 @@
     }
     if (q.length >= 3) {
       var center = map.getCenter();
-      var url = NOMINATIM_URL + "?format=jsonv2&accept-language=tr&limit=5&q=" + encodeURIComponent(q) +
+      var url = NOMINATIM_URL + "?format=jsonv2&accept-language=tr&countrycodes=tr&limit=5&q=" + encodeURIComponent(q) +
         "&viewbox=" + (center.lng - 1) + "," + (center.lat + 1) + "," + (center.lng + 1) + "," + (center.lat - 1) + "&bounded=0";
       fetch(url, { headers: { Accept: "application/json" } })
         .then(function (r) { return r.json(); })
@@ -1154,7 +1154,7 @@
     if (q.length < 3) { renderRecents(); return; }
     searchTimer = setTimeout(function () {
       var center = map.getCenter();
-      var url = NOMINATIM_URL + "?format=jsonv2&accept-language=tr&limit=5&q=" + encodeURIComponent(q) +
+      var url = NOMINATIM_URL + "?format=jsonv2&accept-language=tr&countrycodes=tr&limit=5&q=" + encodeURIComponent(q) +
         "&viewbox=" + (center.lng - 1) + "," + (center.lat + 1) + "," + (center.lng + 1) + "," + (center.lat - 1) + "&bounded=0";
       fetch(url, { headers: { "Accept": "application/json" } })
         .then(function (r) { return r.json(); })
@@ -1295,7 +1295,7 @@
 
   // ---------------- Yakındaki kategoriler ----------------
   var CATEGORIES = [
-    { key: "fuel",       label: "Akaryakıt",       glyph: "⛽", sel: ['node["amenity"="fuel"]', 'way["amenity"="fuel"]'], radius: 6000, fuel: true },
+    { key: "fuel",       label: "Akaryakıt",       glyph: "⛽", sel: ['node["amenity"="fuel"]', 'way["amenity"="fuel"]'], radius: 6000 },
     { key: "food",       label: "Yemek",           glyph: "🍴", sel: ['node["amenity"~"restaurant|fast_food"]', 'way["amenity"~"restaurant|fast_food"]'], radius: 4000 },
     { key: "parking",    label: "Otopark",         glyph: "🅿️", sel: ['node["amenity"="parking"]["access"!="private"]', 'way["amenity"="parking"]["access"!="private"]'], radius: 3000 },
     { key: "groceries",  label: "Market",          glyph: "🛒", sel: ['node["shop"~"supermarket|convenience"]', 'way["shop"~"supermarket|convenience"]'], radius: 4000 },
@@ -1359,29 +1359,6 @@
   }
 
   var catFetchToken = 0;
-  var fuelPrices = null, fuelPricesTried = false;
-
-  function loadFuelPrices() {
-    if (fuelPricesTried) return Promise.resolve(fuelPrices);
-    fuelPricesTried = true;
-    return fetch("data/fuel_prices.json")
-      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-      .then(function (j) { fuelPrices = j.stations || []; return fuelPrices; })
-      .catch(function () { fuelPrices = null; return null; });
-  }
-
-  function matchFuelPrice(pos) {
-    if (!fuelPrices) return null;
-    var best = null, bestD = 250;
-    for (var i = 0; i < fuelPrices.length; i++) {
-      var s = fuelPrices[i];
-      if (typeof s.lat !== "number" || typeof s.lng !== "number") continue;
-      var d = haversine(pos, [s.lng, s.lat]);
-      if (d < bestD) { bestD = d; best = s; }
-    }
-    if (!best || !best.e10) return null;
-    return "£" + (best.e10 / 100).toFixed(2);
-  }
 
   function goToPlace(pos, name) {
     chipAssign = null;
@@ -1396,11 +1373,10 @@
     div.className = "search-item place-item";
     var badge = p.status === "open" ? '<span class="st-open">AÇIK</span>'
       : p.status === "closed" ? '<span class="st-closed">KAPALI</span>' : "";
-    var price = p.price ? '<span class="st-price">' + escapeHtml(p.price) + "</span>" : "";
     div.innerHTML =
       '<div class="place-main"><div class="primary">' + p.glyph + " " + escapeHtml(p.name) + "</div>" +
       '<div class="secondary">' + fmtDist(p.dist) + "</div></div>" +
-      '<div class="place-meta">' + price + badge + "</div>";
+      '<div class="place-meta">' + badge + "</div>";
     div.addEventListener("click", function () { goToPlace(p.pos, p.name); });
     return div;
   }
@@ -1424,14 +1400,12 @@
     var token = ++catFetchToken;
     var around = cat.sel.map(function (s) { return s + "(around:" + cat.radius + "," + center[1] + "," + center[0] + ");"; }).join("");
     var q = "[out:json][timeout:20];(" + around + ");out center 40;";
-    var pricesReady = cat.fuel ? loadFuelPrices() : Promise.resolve(null);
     fetch(OVERPASS_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: "data=" + encodeURIComponent(q)
     })
       .then(function (r) { return r.json(); })
-      .then(function (data) { return pricesReady.then(function () { return data; }); })
       .then(function (data) {
         if (token !== catFetchToken) return;
         var places = [];
@@ -1443,8 +1417,7 @@
           places.push({
             name: name, pos: pos, glyph: cat.glyph,
             dist: haversine(center, pos),
-            status: parseOpenState(t.opening_hours),
-            price: cat.fuel ? matchFuelPrice(pos) : null
+            status: parseOpenState(t.opening_hours)
           });
         });
         var seen = {}, uniq = [];
