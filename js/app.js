@@ -1506,33 +1506,6 @@
   }
 
   function setupDesktopBar() {
-    var qrBuilt = false;
-    $("pc-bar").classList.remove("hidden");
-    $("btn-send").addEventListener("click", function () {
-      if (!qrBuilt) {
-        qrBuilt = true;
-        var url = location.origin + location.pathname;
-        $("send-url").textContent = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
-        try {
-          var qr = qrcode(0, "M");
-          qr.addData(url);
-          qr.make();
-          $("send-qr").innerHTML = qr.createSvgTag({ cellSize: 5, margin: 0 });
-        } catch (e) {
-          $("send-qr").classList.add("hidden");
-        }
-      }
-      $("send-modal").classList.remove("hidden");
-    });
-    $("send-close").addEventListener("click", function () {
-      $("send-modal").classList.add("hidden");
-    });
-    $("send-modal").addEventListener("click", function (e) {
-      if (e.target === this) this.classList.add("hidden");
-    });
-    $("pc-bar-close").addEventListener("click", function () {
-      $("pc-bar").classList.add("hidden");
-    });
   }
 
   function showMapError() {
@@ -1556,7 +1529,6 @@
 
   // ---------------- Başlatma ----------------
   function init() {
-    if (!isMobileDevice() && !isStandalone()) setupDesktopBar();
 
     if ("serviceWorker" in navigator &&
         (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
