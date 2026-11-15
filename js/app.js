@@ -11,7 +11,10 @@
   var OFF_ROUTE_SECONDS = 6;
   var ARRIVE_METERS = 28;
   var DEMO_SPEED_MPS = 17; // ~61 km/s
-  var OVERPASS_URL = "https://overpass-api.de/api/interpreter";
+  var OVERPASS_URLS = [
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass-api.de/api/interpreter"
+  ];
   // Ortak bildirim altyapısı (Supabase)
   var SUPA_URL = "https://powdosapvcvlrhpcggqz.supabase.co";
   var SUPA_KEY = "sb_publishable_4QnCoMp5Q86_hYCCGvGU3w_TwRVmNVF";
@@ -121,6 +124,33 @@
     return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
   }
 
+  // ---------------- Zaman aşımlı Overpass sorgusu ----------------
+  function fetchOverpass(query, timeoutMs) {
+    var idx = 0;
+    function tryNext() {
+      if (idx >= OVERPASS_URLS.length) return Promise.reject(new Error("overpass-timeout"));
+      var url = OVERPASS_URLS[idx++];
+      var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, timeoutMs || 8000) : null;
+      return fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "data=" + encodeURIComponent(query),
+        signal: ctrl ? ctrl.signal : undefined
+      })
+        .then(function (r) {
+          if (timer) clearTimeout(timer);
+          if (!r.ok) throw new Error(r.status);
+          return r.json();
+        })
+        .catch(function () {
+          if (timer) clearTimeout(timer);
+          return tryNext();
+        });
+    }
+    return tryNext();
+  }
+
   // ---------------- Arayüz ve Akıcı Kadın Ses Motoru ----------------
   var toastTimer = null;
   function toast(msg, info) {
@@ -141,7 +171,6 @@
     });
     if (!trVoices.length) return null;
 
-    // Bilinen doğal Türkçe kadın sesleri (öncelik sırasına göre)
     var femaleHints = ["emel", "yelda", "seda", "filiz", "google türkçe", "female", "kadın"];
     var maleHints = ["ahmet", "tolga", "mehmet", "male", "erkek"];
 
@@ -152,7 +181,6 @@
       }
     }
 
-    // Açıkça erkek olmayan ilk Türkçe sesi seç
     for (var j = 0; j < trVoices.length; j++) {
       var n = trVoices[j].name.toLowerCase();
       var isMale = maleHints.some(function (m) { return n.indexOf(m) >= 0; });
@@ -176,11 +204,11 @@
       var u = new SpeechSynthesisUtterance(text);
       u.lang = "tr-TR";
       if (selectedVoice) u.voice = selectedVoice;
-      u.rate = 1.04;  // Daha akıcı ve doğal konuşma temposu
-      u.pitch = 1.12; // Kadın ses tonuna uygun hafif sıcak tını
+      u.rate = 1.04;
+      u.pitch = 1.12;
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(u);
-    } catch (e) { /* sesli yönlendirme desteklenmiyorsa yoksay */ }
+    } catch (e) {}
   }
 
   // ---------------- İşaretçiler ----------------
@@ -437,13 +465,8 @@
     cameraFetchCenter = center;
     var d = 0.15;
     var bbox = (center[1] - d) + "," + (center[0] - d) + "," + (center[1] + d) + "," + (center[0] + d);
-    var q = '[out:json][timeout:12];node["highway"="speed_camera"](' + bbox + ");out;";
-    fetch(OVERPASS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "data=" + encodeURIComponent(q)
-    })
-      .then(function (r) { return r.json(); })
+    var q = '[out:json][timeout:10];node["highway"="speed_camera"](' + bbox + ");out;";
+    fetchOverpass(q, 8000)
       .then(function (data) {
         cameras = (data.elements || []).map(function (el) {
           return { id: "cam" + el.id, pos: [el.lon, el.lat] };
@@ -452,7 +475,7 @@
       })
       .catch(function () {
         cameraFetchCenter = null;
-        cameraBackoffUntil = Date.now() + 60000;
+        cameraBackoffUntil = Date.now() + 120000;
       });
   }
 
@@ -471,7 +494,7 @@
         police = rows.map(function (r) { return { id: "pol" + r.id, pos: [r.lng, r.lat] }; });
         if (map.getSource("police")) map.getSource("police").setData(pointsFC(police));
       })
-      .catch(function () { /* bildirim sunucusu çevrimdışı */ });
+      .catch(function () {});
   }
 
   function submitPoliceReport() {
@@ -685,7 +708,6 @@
     return m || "düz";
   }
 
-  // Ekranda kısa metin, sesli olarak akıcı yol arkadaşı üslubu
   function instructionFor(step, spoken) {
     var t = step.maneuver.type, m = step.maneuver.modifier || "";
     var name = step.name || "";
@@ -1247,7 +1269,6 @@
   var streetFetchAt = 0, streetFetchPos = null;
   var limitFetchAt = 0, limitFetchPos = null, currentLimitKmh = null;
 
-  // OSM maxspeed etiketi -> km/s
   function parseMaxspeedKmh(v) {
     if (!v) return null;
     v = String(v).toLowerCase().trim();
@@ -1297,18 +1318,13 @@
 
   function maybeSpeedLimit(pos, heading) {
     var now = Date.now();
-    if (now - limitFetchAt < 6000) return;
-    if (limitFetchPos && haversine(pos, limitFetchPos) < 30) return;
+    if (now - limitFetchAt < 10000) return;
+    if (limitFetchPos && haversine(pos, limitFetchPos) < 40) return;
     limitFetchAt = now;
     limitFetchPos = pos.slice();
-    var q = "[out:json][timeout:10];way(around:40," + pos[1] + "," + pos[0] +
-      ')[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"];out tags geom 30;';
-    fetch(OVERPASS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "data=" + encodeURIComponent(q)
-    })
-      .then(function (r) { return r.json(); })
+    var q = "[out:json][timeout:8];way(around:40," + pos[1] + "," + pos[0] +
+      ')[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"];out tags geom 25;';
+    fetchOverpass(q, 7000)
       .then(function (data) {
         var best = null, bestScore = Infinity;
         (data.elements || []).forEach(function (w) {
@@ -1356,27 +1372,26 @@
       $("speed-val").textContent = kmh;
       $("speed-bubble").classList.remove("hidden");
     }
-    // hız sınırı aşımı uyarısı (8 km/s tolerans)
     var over = currentLimitKmh && kmh > currentLimitKmh + 8;
     $("speed-val").classList.toggle("over", !!over);
     maybeStreetName(pos);
     maybeSpeedLimit(pos, playerHeading);
   }
 
-  // ---------------- Yakındaki kategoriler ----------------
+  // ---------------- Yakındaki kategoriler (Overpass + Nominatim yedekli) ----------------
   var CATEGORIES = [
-    { key: "fuel",       label: "Akaryakıt",       glyph: "⛽", sel: ['node["amenity"="fuel"]', 'way["amenity"="fuel"]'], radius: 6000 },
-    { key: "food",       label: "Yemek",           glyph: "🍴", sel: ['node["amenity"~"restaurant|fast_food"]', 'way["amenity"~"restaurant|fast_food"]'], radius: 4000 },
-    { key: "parking",    label: "Otopark",         glyph: "🅿️", sel: ['node["amenity"="parking"]["access"!="private"]', 'way["amenity"="parking"]["access"!="private"]'], radius: 3000 },
-    { key: "groceries",  label: "Market",          glyph: "🛒", sel: ['node["shop"~"supermarket|convenience"]', 'way["shop"~"supermarket|convenience"]'], radius: 4000 },
-    { key: "coffee",     label: "Kafe",            glyph: "☕", sel: ['node["amenity"="cafe"]', 'way["amenity"="cafe"]'], radius: 4000 },
-    { key: "shopping",   label: "Alışveriş",       glyph: "🛍️", sel: ['node["shop"~"mall|department_store"]', 'way["shop"~"mall|department_store"]'], radius: 7000 },
-    { key: "pharmacies", label: "Eczane",          glyph: "💊", sel: ['node["amenity"="pharmacy"]', 'way["amenity"="pharmacy"]'], radius: 5000 },
-    { key: "ev",         label: "Şarj İstasyonu",  glyph: "🔌", sel: ['node["amenity"="charging_station"]', 'way["amenity"="charging_station"]'], radius: 7000 },
-    { key: "hospitals",  label: "Hastane",         glyph: "🏥", sel: ['node["amenity"="hospital"]', 'way["amenity"="hospital"]'], radius: 12000 },
-    { key: "hotels",     label: "Otel",            glyph: "🏨", sel: ['node["tourism"="hotel"]', 'way["tourism"="hotel"]'], radius: 8000 },
-    { key: "parks",      label: "Park",            glyph: "🌳", sel: ['node["leisure"="park"]', 'way["leisure"="park"]'], radius: 5000 },
-    { key: "crisis",     label: "Acil Durum",      glyph: "🆘", sel: ['node["amenity"~"police|hospital|fire_station"]', 'way["amenity"~"police|hospital|fire_station"]'], radius: 14000 }
+    { key: "fuel",       label: "Akaryakıt",       glyph: "⛽", nomQ: "akaryakıt petrol istasyonu", sel: ['node["amenity"="fuel"]', 'way["amenity"="fuel"]'], radius: 6000 },
+    { key: "food",       label: "Yemek",           glyph: "🍴", nomQ: "restoran lokanta",           sel: ['node["amenity"~"restaurant|fast_food"]', 'way["amenity"~"restaurant|fast_food"]'], radius: 4000 },
+    { key: "parking",    label: "Otopark",         glyph: "🅿️", nomQ: "otopark",                    sel: ['node["amenity"="parking"]["access"!="private"]', 'way["amenity"="parking"]["access"!="private"]'], radius: 3000 },
+    { key: "groceries",  label: "Market",          glyph: "🛒", nomQ: "süpermarket market",         sel: ['node["shop"~"supermarket|convenience"]', 'way["shop"~"supermarket|convenience"]'], radius: 4000 },
+    { key: "coffee",     label: "Kafe",            glyph: "☕", nomQ: "kafe",                       sel: ['node["amenity"="cafe"]', 'way["amenity"="cafe"]'], radius: 4000 },
+    { key: "shopping",   label: "Alışveriş",       glyph: "🛍️", nomQ: "alışveriş merkezi",          sel: ['node["shop"~"mall|department_store"]', 'way["shop"~"mall|department_store"]'], radius: 7000 },
+    { key: "pharmacies", label: "Eczane",          glyph: "💊", nomQ: "eczane",                     sel: ['node["amenity"="pharmacy"]', 'way["amenity"="pharmacy"]'], radius: 5000 },
+    { key: "ev",         label: "Şarj İstasyonu",  glyph: "🔌", nomQ: "şarj istasyonu",            sel: ['node["amenity"="charging_station"]', 'way["amenity"="charging_station"]'], radius: 7000 },
+    { key: "hospitals",  label: "Hastane",         glyph: "🏥", nomQ: "hastane",                    sel: ['node["amenity"="hospital"]', 'way["amenity"="hospital"]'], radius: 12000 },
+    { key: "hotels",     label: "Otel",            glyph: "🏨", nomQ: "otel",                       sel: ['node["tourism"="hotel"]', 'way["tourism"="hotel"]'], radius: 8000 },
+    { key: "parks",      label: "Park",            glyph: "🌳", nomQ: "park",                       sel: ['node["leisure"="park"]', 'way["leisure"="park"]'], radius: 5000 },
+    { key: "crisis",     label: "Acil Durum",      glyph: "🆘", nomQ: "polis hastane itfaiye",      sel: ['node["amenity"~"police|hospital|fire_station"]', 'way["amenity"~"police|hospital|fire_station"]'], radius: 14000 }
   ];
   function catByKey(k) { for (var i = 0; i < CATEGORIES.length; i++) if (CATEGORIES[i].key === k) return CATEGORIES[i]; return null; }
 
@@ -1458,6 +1473,40 @@
     $("results-title").textContent = cat.glyph + " YAKINDAKİ " + cat.label.toLocaleUpperCase("tr-TR");
   }
 
+  function fallbackCategoryNominatim(cat, center, token, box) {
+    var d = 0.08;
+    var vb = (center[0] - d) + "," + (center[1] + d) + "," + (center[0] + d) + "," + (center[1] - d);
+    var url = NOMINATIM_URL + "?format=jsonv2&accept-language=tr&countrycodes=tr&limit=20&bounded=1&viewbox=" +
+      vb + "&q=" + encodeURIComponent(cat.nomQ || cat.label);
+    fetch(url, { headers: { Accept: "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (items) {
+        if (token !== catFetchToken) return;
+        var places = (items || []).map(function (it) {
+          var pos = [parseFloat(it.lon), parseFloat(it.lat)];
+          var parts = (it.display_name || "").split(",");
+          return {
+            name: it.name || parts[0] || cat.label,
+            pos: pos,
+            glyph: cat.glyph,
+            dist: haversine(center, pos),
+            status: "unknown"
+          };
+        });
+        places.sort(function (a, b) { return a.dist - b.dist; });
+        box.innerHTML = "";
+        if (!places.length) {
+          box.innerHTML = '<div class="place-loading">Yakında sonuç bulunamadı.</div>';
+          return;
+        }
+        places.forEach(function (p) { box.appendChild(placeRow(p)); });
+      })
+      .catch(function () {
+        if (token !== catFetchToken) return;
+        box.innerHTML = '<div class="place-loading">Yerler yüklenemedi — tekrar deneyin.</div>';
+      });
+  }
+
   function runCategory(catKey) {
     var cat = catByKey(catKey);
     if (!cat) return;
@@ -1469,13 +1518,8 @@
     var center = playerPos || map.getCenter().toArray();
     var token = ++catFetchToken;
     var around = cat.sel.map(function (s) { return s + "(around:" + cat.radius + "," + center[1] + "," + center[0] + ");"; }).join("");
-    var q = "[out:json][timeout:20];(" + around + ");out center 40;";
-    fetch(OVERPASS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "data=" + encodeURIComponent(q)
-    })
-      .then(function (r) { return r.json(); })
+    var q = "[out:json][timeout:10];(" + around + ");out center 40;";
+    fetchOverpass(q, 8000)
       .then(function (data) {
         if (token !== catFetchToken) return;
         var places = [];
@@ -1497,13 +1541,16 @@
           if (seen[k]) return; seen[k] = 1; uniq.push(p);
         });
         uniq = uniq.slice(0, 20);
+        if (!uniq.length) {
+          fallbackCategoryNominatim(cat, center, token, box);
+          return;
+        }
         box.innerHTML = "";
-        if (!uniq.length) { box.innerHTML = '<div class="place-loading">Yakında sonuç bulunamadı.</div>'; return; }
         uniq.forEach(function (p) { box.appendChild(placeRow(p)); });
       })
       .catch(function () {
         if (token !== catFetchToken) return;
-        box.innerHTML = '<div class="place-loading">Yerler yüklenemedi — tekrar deneyin.</div>';
+        fallbackCategoryNominatim(cat, center, token, box);
       });
   }
 
