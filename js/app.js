@@ -45,6 +45,7 @@
   var rerouting = false;
   var announcedForStep = {};   // stepIdx -> yapılan en yüksek anons seviyesi (1=uzak, 2=yakın, 3=şimdi)
   var voiceOn = true;
+  var selectedVoice = null;
   var wakeLock = null;
   var arrived = false;
 
@@ -120,7 +121,7 @@
     return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
   }
 
-  // ---------------- Arayüz yardımcıları ----------------
+  // ---------------- Arayüz ve Akıcı Kadın Ses Motoru ----------------
   var toastTimer = null;
   function toast(msg, info) {
     var el = $("toast");
@@ -132,12 +133,51 @@
     toastTimer = setTimeout(function () { el.classList.add("hidden"); }, 3500);
   }
 
+  function pickTurkishFemaleVoice() {
+    if (!window.speechSynthesis) return null;
+    var voices = window.speechSynthesis.getVoices() || [];
+    var trVoices = voices.filter(function (v) {
+      return v.lang && v.lang.toLowerCase().indexOf("tr") === 0;
+    });
+    if (!trVoices.length) return null;
+
+    // Bilinen doğal Türkçe kadın sesleri (öncelik sırasına göre)
+    var femaleHints = ["emel", "yelda", "seda", "filiz", "google türkçe", "female", "kadın"];
+    var maleHints = ["ahmet", "tolga", "mehmet", "male", "erkek"];
+
+    for (var h = 0; h < femaleHints.length; h++) {
+      for (var i = 0; i < trVoices.length; i++) {
+        var name = trVoices[i].name.toLowerCase();
+        if (name.indexOf(femaleHints[h]) >= 0) return trVoices[i];
+      }
+    }
+
+    // Açıkça erkek olmayan ilk Türkçe sesi seç
+    for (var j = 0; j < trVoices.length; j++) {
+      var n = trVoices[j].name.toLowerCase();
+      var isMale = maleHints.some(function (m) { return n.indexOf(m) >= 0; });
+      if (!isMale) return trVoices[j];
+    }
+
+    return trVoices[0];
+  }
+
+  if (window.speechSynthesis) {
+    selectedVoice = pickTurkishFemaleVoice();
+    window.speechSynthesis.onvoiceschanged = function () {
+      selectedVoice = pickTurkishFemaleVoice();
+    };
+  }
+
   function speak(text) {
     if (!voiceOn || !window.speechSynthesis) return;
     try {
+      if (!selectedVoice) selectedVoice = pickTurkishFemaleVoice();
       var u = new SpeechSynthesisUtterance(text);
       u.lang = "tr-TR";
-      u.rate = 1.0;
+      if (selectedVoice) u.voice = selectedVoice;
+      u.rate = 1.04;  // Daha akıcı ve doğal konuşma temposu
+      u.pitch = 1.12; // Kadın ses tonuna uygun hafif sıcak tını
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(u);
     } catch (e) { /* sesli yönlendirme desteklenmiyorsa yoksay */ }
@@ -505,10 +545,10 @@
   }
 
   function spokenFor(kind, item) {
-    if (kind === "camera") return "İleride hız kamerası var.";
-    if (kind === "police") return "İleride polis kontrolü bildirildi.";
+    if (kind === "camera") return "Dikkat et, ileride hız kamerası var.";
+    if (kind === "police") return "Haberin olsun, ileride polis çevirmesi bildirildi.";
     var t = (item && item.title) || "İleride trafik olayı var";
-    return t.charAt(0) + t.slice(1).toLocaleLowerCase("tr-TR") + ".";
+    return "Dikkat, " + t.toLocaleLowerCase("tr-TR") + ".";
   }
 
   function checkAlerts(pos, heading) {
@@ -645,24 +685,53 @@
     return m || "düz";
   }
 
+  // Ekranda kısa metin, sesli olarak akıcı yol arkadaşı üslubu
   function instructionFor(step, spoken) {
     var t = step.maneuver.type, m = step.maneuver.modifier || "";
     var name = step.name || "";
-    var onto = name ? (spoken ? " " + name + " yönüne" : name) : "";
-    if (t === "depart") return spoken ? ("Yola çıkın" + (name ? ", " + name + " üzerinden" : "")) : (name || "YOLA ÇIKIN");
-    if (t === "arrive") return spoken ? "Varış noktanıza ulaştınız" : "VARIŞ NOKTASI";
+    var onto = name ? (spoken ? ", " + name + " yönüne" : name) : "";
+
+    if (t === "depart") {
+      return spoken
+        ? ("Çıkış yapıyoruz" + (name ? ", " + name + " üzerinden" : ""))
+        : (name || "YOLA ÇIKIN");
+    }
+    if (t === "arrive") {
+      return spoken ? "Hedefe ulaştık, sağda veya solda kalıyor" : "VARIŞ NOKTASI";
+    }
     if (t === "roundabout" || t === "rotary") {
       var exit = step.maneuver.exit || 1;
-      return spoken ? ("Döner kavşaktan " + exit + ". çıkıştan çıkın" + onto) : (name || "DÖNER KAVŞAK");
+      return spoken
+        ? ("Kavşağa girince " + exit + ". çıkıştan çıkıyoruz" + onto)
+        : (name || "DÖNER KAVŞAK");
     }
-    if (m.indexOf("uturn") >= 0) return spoken ? "U dönüşü yapın" : (name || "U DÖNÜŞÜ");
-    if (t === "merge") return spoken ? (translateModifier(m) + " şeride katılın" + onto) : (name || "ŞERİDE KATILIN");
-    if (t === "on ramp") return spoken ? ("Bağlantı yoluna girin" + onto) : (name || "BAĞLANTI YOLU");
-    if (t === "off ramp") return spoken ? ("Çıkıştan ayrılın" + onto) : (name || "ÇIKIŞ");
-    if (t === "fork") return spoken ? ("Yol ayrımından " + translateModifier(m) + " devam edin" + onto) : (name || "YOL AYRIMI");
-    if (m === "straight" || (t === "continue" && !m)) return spoken ? ("Düz devam edin" + onto) : (name || "DÜZ DEVAM EDİN");
+    if (m.indexOf("uturn") >= 0) {
+      return spoken ? "Müsait yerden U dönüşü yapıyoruz" : (name || "U DÖNÜŞÜ");
+    }
+    if (t === "merge") {
+      return spoken
+        ? (translateModifier(m) + " doğru şeride bağlanıyoruz" + onto)
+        : (name || "ŞERİDE KATILIN");
+    }
+    if (t === "on ramp") {
+      return spoken ? ("Bağlantı yoluna giriyoruz" + onto) : (name || "BAĞLANTI YOLU");
+    }
+    if (t === "off ramp") {
+      return spoken ? ("Sağdaki çıkıştan ayrılıyoruz" + onto) : (name || "ÇIKIŞ");
+    }
+    if (t === "fork") {
+      return spoken
+        ? ("Yol ayrımından " + translateModifier(m) + " devam ediyoruz" + onto)
+        : (name || "YOL AYRIMI");
+    }
+    if (m === "straight" || (t === "continue" && !m)) {
+      return spoken ? ("Düz devam ediyoruz" + onto) : (name || "DÜZ DEVAM EDİN");
+    }
+
     var dir = translateModifier(m);
-    return spoken ? (dir + " dönün" + onto) : (name || dir.toLocaleUpperCase("tr-TR") + " DÖNÜN");
+    return spoken
+      ? (dir + " dönüyoruz" + onto)
+      : (name || dir.toLocaleUpperCase("tr-TR") + " DÖNÜN");
   }
 
   // ---------------- Rota noktası / rota kurulumu ----------------
@@ -676,7 +745,7 @@
     saveRecent(label, waypointLngLat);
     hideSheet();
     $("hint").classList.add("hidden");
-    speak("Rota noktası belirlendi.");
+    speak("Tamamdır, noktayı işaretledim.");
     requestRoute();
   }
 
@@ -832,7 +901,7 @@
     $("nav-bar").classList.remove("hidden");
     $("turn-banner").classList.remove("hidden");
     acquireWakeLock();
-    speak("Rota başlatıldı.");
+    speak("Hazırsan çıkalım, rotayı başlattım.");
     fetchCameras(demoActive ? route.coords[0] : (playerPos || route.coords[0]));
     fetchPolice(demoActive ? route.coords[0] : (playerPos || route.coords[0]));
     if (demoActive) {
@@ -853,7 +922,7 @@
     $("nav-bar").classList.add("hidden");
     $("turn-banner").classList.add("hidden");
     releaseWakeLock();
-    if (!silent) speak("Rota sonlandırıldı.");
+    if (!silent) speak("Tamamdır, yönlendirmeyi kapattım.");
     if (route) {
       $("route-panel").classList.remove("hidden");
       map.easeTo({ pitch: 0, bearing: 0, duration: 600 });
@@ -922,7 +991,7 @@
         else if (Date.now() - offRouteSince > OFF_ROUTE_SECONDS * 1000 && !rerouting) {
           offRouteSince = null;
           toast("ROTA YENİDEN HESAPLANIYOR…", true);
-          speak("Rota yeniden hesaplanıyor.");
+          speak("Yoldan çıktık galiba, hemen yeni bir rota çiziyorum.");
           requestRoute();
           return;
         }
@@ -943,18 +1012,19 @@
     $("turn-dist").textContent = fmtDist(distToTurn);
     $("turn-street").textContent = instructionFor(upcoming, false);
 
-    // --- sesli uyarılar ---
+    // --- akıcı sesli uyarılar ---
     var tier = announcedForStep[upcomingIdx] || 0;
     if (upcoming.maneuver.type !== "depart") {
       if (distToTurn < 40 && tier < 3) {
         announcedForStep[upcomingIdx] = 3;
-        speak(instructionFor(upcoming, true));
+        var nowPhrase = instructionFor(upcoming, true);
+        speak(upcoming.maneuver.type === "arrive" ? nowPhrase : ("Hemen buradan " + nowPhrase.toLocaleLowerCase("tr-TR")));
       } else if (distToTurn < 210 && tier < 2) {
         announcedForStep[upcomingIdx] = 2;
-        speak(fmtDistSpoken(distToTurn) + " sonra, " + instructionFor(upcoming, true).toLocaleLowerCase("tr-TR"));
+        speak(fmtDistSpoken(distToTurn) + " ileriden " + instructionFor(upcoming, true).toLocaleLowerCase("tr-TR"));
       } else if (distToTurn < 900 && distToTurn > 300 && tier < 1) {
         announcedForStep[upcomingIdx] = 1;
-        speak(fmtDistSpoken(distToTurn) + " sonra, " + instructionFor(upcoming, true).toLocaleLowerCase("tr-TR"));
+        speak(fmtDistSpoken(distToTurn) + " sonra " + instructionFor(upcoming, true).toLocaleLowerCase("tr-TR"));
       }
     }
 
@@ -980,7 +1050,7 @@
     if (remaining < ARRIVE_METERS) {
       arrived = true;
       $("arrive").classList.remove("hidden");
-      speak("Varış noktanıza ulaştınız.");
+      speak("Geldik sayılır, hedefe ulaştık.");
       setTimeout(function () {
         $("arrive").classList.add("hidden");
         stopNav(true);
