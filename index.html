@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Waypoint</title>
-  <meta name="description" content="Waypoint — turn-by-turn navigation with a GTA-inspired look.">
+  <meta name="description" content="Waypoint — GTA tarzı görünüme sahip adım adım navigasyon.">
   <meta name="theme-color" content="#1A1D20">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Waypoint">
@@ -21,19 +21,19 @@
   <!-- Desktop-only: Waze-style promo bar + send-to-phone modal -->
   <div id="pc-bar" class="pc-bar hidden">
     <div class="logo pc-bar-logo"><svg class="logo-mark" viewBox="0 0 44 44" aria-hidden="true"><rect width="44" height="44" rx="10" fill="#0E0F11"/><path d="M8 36 L18 26 L24 30 L34 16" stroke="#33383D" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M8 36 L18 26 L24 30 L34 16" stroke="#A868E8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke-dasharray="1 5"/><g fill="#8F3FE0" stroke="#17191C" stroke-width="1.6"><rect x="30.5" y="4" width="7" height="20" rx="3.5"/><rect x="24" y="10.5" width="20" height="7" rx="3.5"/><circle cx="34" cy="14" r="5"/></g><circle cx="34" cy="14" r="1.8" fill="#2A1740"/></svg></div>
-    <div class="pc-bar-text">GPS NAVIGATION &middot; BUILT FOR YOUR PHONE</div>
-    <button id="btn-send" class="btn-send">SEND TO YOUR PHONE</button>
-    <button id="pc-bar-close" class="pc-bar-x" aria-label="Dismiss">&#10005;</button>
+    <div class="pc-bar-text">GPS NAVİGASYON &middot; TELEFONUNUZ İÇİN TASARLANDI</div>
+    <button id="btn-send" class="btn-send">TELEFONA GÖNDER</button>
+    <button id="pc-bar-close" class="pc-bar-x" aria-label="Kapat">&#10005;</button>
   </div>
 
   <div id="send-modal" class="modal hidden">
     <div class="modal-card">
-      <button id="send-close" class="modal-x" aria-label="Close">&#10005;</button>
+      <button id="send-close" class="modal-x" aria-label="Kapat">&#10005;</button>
       <div class="logo gate-logo"><svg class="logo-mark" viewBox="0 0 44 44" aria-hidden="true"><rect width="44" height="44" rx="10" fill="#0E0F11"/><path d="M8 36 L18 26 L24 30 L34 16" stroke="#33383D" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M8 36 L18 26 L24 30 L34 16" stroke="#A868E8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke-dasharray="1 5"/><g fill="#8F3FE0" stroke="#17191C" stroke-width="1.6"><rect x="30.5" y="4" width="7" height="20" rx="3.5"/><rect x="24" y="10.5" width="20" height="7" rx="3.5"/><circle cx="34" cy="14" r="5"/></g><circle cx="34" cy="14" r="1.8" fill="#2A1740"/></svg></div>
-      <div class="gate-title">GET IT ON YOUR PHONE</div>
+      <div class="gate-title">TELEFONUNA YÜKLE</div>
       <div id="send-qr" class="gate-qr"></div>
       <div id="send-url" class="gate-url"></div>
-      <div class="gate-hint">SCAN WITH YOUR PHONE CAMERA<br>IPHONE: SHARE &rarr; ADD TO HOME SCREEN<br>ANDROID: TAP INSTALL APP</div>
+      <div class="gate-hint">TELEFON KAMERASIYLA TARATIN<br>IPHONE: PAYLAŞ &rarr; ANA EKRANA EKLE<br>ANDROID: UYGULAMAYI YÜKLE'YE DOKUNUN</div>
     </div>
   </div>
 
@@ -46,33 +46,33 @@
   <div id="sheet" class="sheet">
     <div id="sheet-handle" class="sheet-handle" aria-hidden="true"><span></span></div>
     <div class="sheet-search">
-      <input id="search" type="text" autocomplete="off" spellcheck="false" placeholder="WHERE TO?" aria-label="Where to?">
+      <input id="search" type="text" autocomplete="off" spellcheck="false" placeholder="NEREYE?" aria-label="Nereye?">
     </div>
     <div class="chips">
-      <button class="chip" id="chip-home">&#127968; SET HOME</button>
-      <button class="chip" id="chip-work">&#128188; SET WORK</button>
+      <button class="chip" id="chip-home">&#127968; EVİ AYARLA</button>
+      <button class="chip" id="chip-work">&#128188; İŞİ AYARLA</button>
     </div>
     <div class="cat-presets" id="cat-presets">
-      <button class="cat-chip" data-cat="fuel">&#9981; FUEL</button>
-      <button class="cat-chip" data-cat="food">&#127860; FOOD</button>
-      <button class="cat-chip" data-cat="parking">&#128658; PARKING</button>
-      <button class="cat-chip" data-cat="groceries">&#128722; GROCERIES</button>
-      <button class="cat-chip cat-more" id="cat-more-btn">&#8943; MORE</button>
+      <button class="cat-chip" data-cat="fuel">&#9981; YAKIT</button>
+      <button class="cat-chip" data-cat="food">&#127860; YEMEK</button>
+      <button class="cat-chip" data-cat="parking">&#128658; OTOPARK</button>
+      <button class="cat-chip" data-cat="groceries">&#128722; MARKET</button>
+      <button class="cat-chip cat-more" id="cat-more-btn">&#8943; DAHA FAZLA</button>
     </div>
     <div class="results-head hidden" id="results-head">
-      <button id="results-back" class="results-back" aria-label="Back">&#8249;</button>
-      <span id="results-title">RESULTS</span>
+      <button id="results-back" class="results-back" aria-label="Geri">&#8249;</button>
+      <span id="results-title">SONUÇLAR</span>
     </div>
-    <div id="recents-label" class="recents-label hidden">RECENT</div>
+    <div id="recents-label" class="recents-label hidden">SON ARAMALAR</div>
     <div id="search-results" class="sheet-results"></div>
   </div>
 
   <!-- Full category screen (opened from MORE) -->
   <div id="cat-screen" class="cat-screen hidden">
     <div class="cat-screen-head">
-      <button id="cat-screen-back" class="cat-screen-btn" aria-label="Back">&#8249;</button>
-      <span class="cat-screen-title">CATEGORIES</span>
-      <button id="cat-screen-close" class="cat-screen-btn" aria-label="Close">&#10005;</button>
+      <button id="cat-screen-back" class="cat-screen-btn" aria-label="Geri">&#8249;</button>
+      <span class="cat-screen-title">KATEGORİLER</span>
+      <button id="cat-screen-close" class="cat-screen-btn" aria-label="Kapat">&#10005;</button>
     </div>
     <div id="cat-screen-list" class="cat-screen-list"></div>
   </div>
@@ -80,25 +80,25 @@
   <!-- Free-drive HUD: speed bubble, current street, report FAB -->
   <div id="speed-bubble" class="speed-bubble hidden">
     <div id="speed-val">0</div>
-    <div class="speed-unit">MPH</div>
+    <div class="speed-unit">KM/S</div>
   </div>
   <div id="limit-sign" class="limit-sign hidden">
-    <span id="limit-val">30</span>
+    <span id="limit-val">50</span>
   </div>
   <div id="street-pill" class="street-pill hidden"></div>
-  <button id="btn-report" class="report-fab" title="Report police" aria-label="Report police">&#9888;</button>
+  <button id="btn-report" class="report-fab" title="Polis bildir" aria-label="Polis bildir">&#9888;</button>
 
   <!-- Turn-by-turn banner (hidden until navigating) -->
   <div id="turn-banner" class="turn-banner hidden">
     <div id="turn-arrow" class="turn-arrow">&#8593;</div>
     <div class="turn-text">
-      <div id="turn-dist" class="turn-dist">0 FT</div>
+      <div id="turn-dist" class="turn-dist">0 M</div>
       <div id="turn-street" class="turn-street">&nbsp;</div>
     </div>
   </div>
 
   <!-- Hint bubble -->
-  <div id="hint" class="hint">TAP THE MAP TO SET A WAYPOINT</div>
+  <div id="hint" class="hint">ROTA BELİRLEMEK İÇİN HARİTAYA DOKUNUN</div>
 
   <!-- Proximity alert (speed camera / police) -->
   <div id="alert-banner" class="alert-banner hidden">
@@ -111,16 +111,16 @@
 
   <!-- Police report sheet -->
   <div id="report-sheet" class="report-sheet hidden">
-    <button id="report-police" class="btn-report-confirm">&#128110; REPORT POLICE HERE</button>
-    <button id="report-cancel" class="btn-report-cancel">CANCEL</button>
+    <button id="report-police" class="btn-report-confirm">&#128110; BURADA POLİS BİLDİR</button>
+    <button id="report-cancel" class="btn-report-cancel">İPTAL</button>
   </div>
 
   <!-- Right-side buttons -->
   <div class="hud-side">
-    <button id="btn-traffic" class="side-btn" title="Toggle live traffic" aria-label="Toggle live traffic">&#128678;</button>
-    <button id="btn-voice" class="side-btn" title="Voice guidance" aria-label="Toggle voice guidance">&#128266;</button>
-    <button id="btn-north" class="side-btn" title="Face north" aria-label="Face north">N</button>
-    <button id="btn-recenter" class="side-btn" title="Recenter" aria-label="Recenter on my position">&#9678;</button>
+    <button id="btn-traffic" class="side-btn" title="Canlı trafiği aç/kapat" aria-label="Canlı trafiği aç/kapat">&#128678;</button>
+    <button id="btn-voice" class="side-btn" title="Sesli yönlendirme" aria-label="Sesli yönlendirmeyi aç/kapat">&#128266;</button>
+    <button id="btn-north" class="side-btn" title="Kuzeye dön" aria-label="Kuzeye dön">K</button>
+    <button id="btn-recenter" class="side-btn" title="Konuma ortala" aria-label="Konumuma ortala">&#9678;</button>
   </div>
 
   <!-- Route summary panel (appears after waypoint is set) -->
@@ -128,13 +128,13 @@
     <div class="dir-rows">
       <div class="dir-row">
         <span class="dir-dot dir-dot-from" aria-hidden="true"></span>
-        <input id="from-input" type="text" autocomplete="off" spellcheck="false" placeholder="YOUR LOCATION" aria-label="Starting point">
+        <input id="from-input" type="text" autocomplete="off" spellcheck="false" placeholder="KONUMUNUZ" aria-label="Başlangıç noktası">
       </div>
       <div class="dir-row">
         <span class="dir-dot dir-dot-to" aria-hidden="true"></span>
-        <input id="to-input" type="text" autocomplete="off" spellcheck="false" placeholder="CHOOSE DESTINATION" aria-label="Destination">
+        <input id="to-input" type="text" autocomplete="off" spellcheck="false" placeholder="VARIŞ NOKTASI SEÇİN" aria-label="Varış noktası">
       </div>
-      <button id="btn-swap" class="btn-swap" title="Swap start and destination" aria-label="Swap start and destination">&#8645;</button>
+      <button id="btn-swap" class="btn-swap" title="Başlangıç ve varışı değiştir" aria-label="Başlangıç ve varışı değiştir">&#8645;</button>
       <div id="dir-results" class="search-results dir-results hidden"></div>
     </div>
     <div class="route-stats">
@@ -143,9 +143,9 @@
       <span id="route-traffic" class="route-traffic hidden"></span>
     </div>
     <div class="route-actions">
-      <button id="btn-go" class="btn-go">START ROUTE</button>
-      <button id="btn-demo" class="btn-demo" title="Simulated drive along the route">DEMO DRIVE</button>
-      <button id="btn-cancel" class="btn-cancel" aria-label="Cancel route">&#10005;</button>
+      <button id="btn-go" class="btn-go">ROTAYI BAŞLAT</button>
+      <button id="btn-demo" class="btn-demo" title="Rota boyunca simülasyon sürüşü">DEMO SÜRÜŞ</button>
+      <button id="btn-cancel" class="btn-cancel" aria-label="Rotayı iptal et">&#10005;</button>
     </div>
   </div>
 
@@ -153,24 +153,24 @@
   <div id="nav-bar" class="nav-bar hidden">
     <div class="nav-cell">
       <div id="nav-eta" class="nav-big eta-green">--:--</div>
-      <div class="nav-label">ETA</div>
+      <div class="nav-label">VARIŞ</div>
     </div>
     <div class="nav-cell">
-      <div id="nav-remaining" class="nav-big">-- MI</div>
-      <div class="nav-label">LEFT</div>
+      <div id="nav-remaining" class="nav-big">-- KM</div>
+      <div class="nav-label">KALAN</div>
     </div>
     <div class="nav-cell">
       <div id="nav-speed" class="nav-big">0</div>
-      <div class="nav-label">MPH</div>
+      <div class="nav-label">KM/S</div>
     </div>
-    <button id="btn-end" class="btn-end">END</button>
+    <button id="btn-end" class="btn-end">BİTİR</button>
   </div>
 
   <!-- Arrival splash -->
   <div id="arrive" class="arrive hidden">
     <div class="arrive-inner">
-      <div class="arrive-title">YOU HAVE ARRIVED</div>
-      <div class="arrive-sub">~ destination reached ~</div>
+      <div class="arrive-title">VARIŞ NOKTASINA ULAŞTINIZ</div>
+      <div class="arrive-sub">~ hedefe ulaşıldı ~</div>
     </div>
   </div>
 
