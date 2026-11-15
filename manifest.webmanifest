@@ -1,7 +1,8 @@
 {
   "name": "Waypoint",
   "short_name": "Waypoint",
-  "description": "Waypoint — turn-by-turn navigation with a GTA-inspired look.",
+  "description": "Waypoint — GTA tarzı görünüme sahip adım adım navigasyon.",
+  "lang": "tr",
   "start_url": ".",
   "display": "standalone",
   "orientation": "portrait",
